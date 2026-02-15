@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+.next/
+coverage/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+
+# Prisma generated
+apps/api/node_modules/
+apps/web/node_modules/
+EOF

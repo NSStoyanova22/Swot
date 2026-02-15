@@ -1,0 +1,13 @@
+{
+  "name": "swot",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "dev": "concurrently -n WEB,API -c auto \"pnpm --filter web dev\" \"pnpm --filter api dev\"",
+    "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

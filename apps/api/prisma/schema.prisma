@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  courses    Course[]
+  activities Activity[]
+  sessions   StudySession[]
+  settings   Settings?
+  targets    DailyTarget[]
+}
+
+model Course {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+
+  user       User           @relation(fields: [userId], references: [id])
+  activities Activity[]
+  sessions   StudySession[]
+
+  @@unique([userId, name])
+}
+
+model Activity {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  name      String
+  color     String   @default("#ec4899")
+  createdAt DateTime @default(now())
+
+  user     User           @relation(fields: [userId], references: [id])
+  course   Course         @relation(fields: [courseId], references: [id])
+  sessions StudySession[]
+
+  @@unique([courseId, name])
+}
+
+model StudySession {
+  id              String   @id @default(cuid())
+  userId          String
+  courseId        String
+  activityId      String?
+  startTime       DateTime
+  endTime         DateTime
+  breakMinutes    Int      @default(0)
+  durationMinutes Int
+  note            String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id])
+  course   Course    @relation(fields: [courseId], references: [id])
+  activity Activity? @relation(fields: [activityId], references: [id])
+
+  @@index([userId, startTime])
+  @@index([courseId, startTime])
+}
+
+model Settings {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  cutoffTime          String   @default("05:00")
+  soundsEnabled       Boolean  @default(true)
+  shortSessionMinutes Int      @default(25)
+  longSessionMinutes  Int      @default(50)
+  breakSessionMinutes Int      @default(5)
+  createdAt           DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model DailyTarget {
+  id            String   @id @default(cuid())
+  userId        String
+  weekday       Int
+  targetMinutes Int
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, weekday])
+}
