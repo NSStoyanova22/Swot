@@ -468,7 +468,7 @@ export function CalendarPage() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <CalendarDays className="h-4 w-4 text-primary" />
-                Calendar
+                📅 Calendar
               </CardTitle>
               <CardDescription>Monthly overview with daily totals and study color dots.</CardDescription>
             </div>

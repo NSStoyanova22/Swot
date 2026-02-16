@@ -27,6 +27,7 @@ import { useToast } from '@/components/ui/toast'
 import { useFocusSoundPreferences } from '@/hooks/use-focus-sound-preferences'
 import { useHealthQuery } from '@/hooks/use-health-query'
 import { useSessionSync } from '@/hooks/use-session-sync'
+import { useUiPersonalization } from '@/hooks/use-ui-personalization'
 import { type ThemeName, useTheme } from '@/hooks/use-theme'
 
 const weekdayOrder: Array<{ day: string; weekday: number }> = [
@@ -49,6 +50,16 @@ const defaultForm: UpdatePreferencesDto = {
     adaptiveEnabled: true,
   },
   targets: weekdayOrder.map(({ weekday }) => ({ weekday, targetMinutes: 90 })),
+  uiPreferences: {
+    workspaceName: 'Study Hub',
+    avatar: '✨',
+    accentColor: '#e11d77',
+    dashboardBackground:
+      'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)',
+    themePreset: 'pink',
+    widgetStyle: 'soft',
+    layoutDensity: 'comfortable',
+  },
 }
 
 function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePreferencesDto {
@@ -68,6 +79,7 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
       weekday,
       targetMinutes: targetsByWeekday.get(weekday) ?? 90,
     })),
+    uiPreferences: meData.uiPreferences ?? defaultForm.uiPreferences,
   }
 }
 
@@ -88,6 +100,17 @@ export function SettingsPage() {
   const [showCalendarLink, setShowCalendarLink] = useState(false)
   const [copied, setCopied] = useState(false)
   const [downloadingReport, setDownloadingReport] = useState(false)
+  useUiPersonalization({
+    workspaceName: form.uiPreferences?.workspaceName ?? 'Study Hub',
+    avatar: form.uiPreferences?.avatar ?? '✨',
+    accentColor: form.uiPreferences?.accentColor ?? '#e11d77',
+    dashboardBackground:
+      form.uiPreferences?.dashboardBackground ??
+      'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)',
+    themePreset: form.uiPreferences?.themePreset ?? 'pink',
+    widgetStyle: form.uiPreferences?.widgetStyle ?? 'soft',
+    layoutDensity: form.uiPreferences?.layoutDensity ?? 'comfortable',
+  })
 
   const calendarFeedUrl = useMemo(() => {
     const base = import.meta.env.VITE_API_URL.endsWith('/')
@@ -103,6 +126,14 @@ export function SettingsPage() {
       setIsInitialized(true)
     }
   }, [isInitialized, meQuery.data])
+
+  useEffect(() => {
+    const preset = form.uiPreferences?.themePreset
+    if (!preset) return
+    if (theme !== preset) {
+      setTheme(preset as ThemeName)
+    }
+  }, [form.uiPreferences?.themePreset, setTheme, theme])
 
   const mutation = useMutation({
     mutationFn: updatePreferences,
@@ -184,6 +215,9 @@ export function SettingsPage() {
 
   const handleSave = () => {
     if (validationError) return
+    if (form.uiPreferences?.themePreset) {
+      setTheme(form.uiPreferences.themePreset as ThemeName)
+    }
     mutation.mutate(form)
   }
 
@@ -286,7 +320,7 @@ export function SettingsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Settings2 className="h-4 w-4 text-primary" />
-            Study Preferences
+            ⚙️ Study Preferences
           </CardTitle>
           <CardDescription>Configure targets, day cutoff, default duration buttons, and audio behavior.</CardDescription>
         </CardHeader>
@@ -541,6 +575,143 @@ export function SettingsPage() {
                   <p className="mt-1 text-xs text-muted-foreground">{option.description}</p>
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+            <p className="text-sm font-semibold">Personalization Studio</p>
+            <p className="mt-1 text-xs text-muted-foreground">Live preview with accent, avatar, workspace, widget style, and density.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Workspace name</span>
+                <Input
+                  value={form.uiPreferences?.workspaceName ?? ''}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        workspaceName: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Avatar</span>
+                <Input
+                  value={form.uiPreferences?.avatar ?? ''}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        avatar: event.target.value.slice(0, 8),
+                      },
+                    }))
+                  }
+                  placeholder="✨"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Accent color</span>
+                <Input
+                  type="color"
+                  value={form.uiPreferences?.accentColor ?? '#e11d77'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        accentColor: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Theme preset</span>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.uiPreferences?.themePreset ?? 'pink'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        themePreset: event.target.value as ThemeName,
+                      },
+                    }))
+                  }
+                >
+                  {themeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Widget style</span>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.uiPreferences?.widgetStyle ?? 'soft'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        widgetStyle: event.target.value as 'soft' | 'glass' | 'flat',
+                      },
+                    }))
+                  }
+                >
+                  <option value="soft">Soft</option>
+                  <option value="glass">Glass</option>
+                  <option value="flat">Flat</option>
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Layout density</span>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.uiPreferences?.layoutDensity ?? 'comfortable'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      uiPreferences: {
+                        ...current.uiPreferences,
+                        layoutDensity: event.target.value as 'comfortable' | 'compact' | 'cozy',
+                      },
+                    }))
+                  }
+                >
+                  <option value="compact">Compact</option>
+                  <option value="comfortable">Comfortable</option>
+                  <option value="cozy">Cozy</option>
+                </select>
+              </label>
+            </div>
+            <label className="mt-3 block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Custom dashboard background</span>
+              <Input
+                value={form.uiPreferences?.dashboardBackground ?? ''}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      dashboardBackground: event.target.value,
+                    },
+                  }))
+                }
+              />
+            </label>
+            <div className="mt-3 rounded-lg border border-border/70 p-3" style={{ backgroundImage: form.uiPreferences?.dashboardBackground }}>
+              <p className="text-sm font-semibold">
+                {form.uiPreferences?.avatar} {form.uiPreferences?.workspaceName}
+              </p>
+              <p className="text-xs text-muted-foreground">Live preview of your personal workspace identity.</p>
             </div>
           </div>
 

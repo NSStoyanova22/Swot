@@ -270,7 +270,7 @@ export function FocusSoundsPanel() {
   }, [])
 
   return (
-    <Card className="shadow-soft xl:col-span-2">
+    <Card className="w-full shadow-soft">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           🎵 Focus Sounds

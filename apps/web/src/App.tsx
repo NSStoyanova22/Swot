@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { useQuery } from '@tanstack/react-query'
 import {
   Award,
   BarChart3,
@@ -14,13 +15,13 @@ import {
   PanelLeftOpen,
   RefreshCcw,
   Settings,
-  Sparkles,
   X,
 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { GlobalSearch } from '@/components/global-search'
+import { getMe } from '@/api/me'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AchievementsPage } from '@/features/achievements/achievements-page'
 import { CalendarPage } from '@/features/calendar/calendar-page'
@@ -32,22 +33,28 @@ import { SessionsPage } from '@/features/sessions/sessions-page'
 import { SettingsPage } from '@/features/settings/settings-page'
 import { TimerPage } from '@/features/timer/timer-page'
 import { useSessionSync } from '@/hooks/use-session-sync'
+import { useUiPersonalization } from '@/hooks/use-ui-personalization'
 import { useTheme, type ThemeName } from '@/hooks/use-theme'
 import { cn } from '@/lib/utils'
 
 const navigation = [
-  { name: 'Dashboard', icon: LayoutDashboard },
-  { name: 'Timer', icon: Clock3 },
-  { name: 'Sessions', icon: Gauge },
-  { name: 'Courses', icon: BookOpen },
-  { name: 'Planner', icon: CalendarClock },
-  { name: 'Calendar', icon: CalendarDays },
-  { name: 'Insights', icon: BarChart3 },
-  { name: 'Achievements', icon: Award },
-  { name: 'Settings', icon: Settings },
+  { name: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { name: 'Timer', label: 'Timer', icon: Clock3 },
+  { name: 'Sessions', label: 'Sessions', icon: Gauge },
+  { name: 'Courses', label: 'Courses', icon: BookOpen },
+  { name: 'Planner', label: 'Planner', icon: CalendarClock },
+  { name: 'Calendar', label: 'Calendar', icon: CalendarDays },
+  { name: 'Insights', label: 'Insights', icon: BarChart3 },
+  { name: 'Achievements', label: 'Achievements', icon: Award },
+  { name: 'Settings', label: 'Settings', icon: Settings },
 ] as const
 
 type NavName = (typeof navigation)[number]['name']
+
+const navLabels: Record<NavName, string> = Object.fromEntries(navigation.map((item) => [item.name, item.label])) as Record<
+  NavName,
+  string
+>
 function App() {
   const [activeNav, setActiveNav] = useState<NavName>('Dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -57,6 +64,17 @@ function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const { theme, setTheme, options: themeOptions } = useTheme()
   const sync = useSessionSync()
+  const meQuery = useQuery({
+    queryKey: ['me'],
+    queryFn: ({ signal }) => getMe(signal),
+  })
+  useUiPersonalization(meQuery.data?.uiPreferences)
+
+  useEffect(() => {
+    const preferredTheme = meQuery.data?.uiPreferences?.themePreset
+    if (!preferredTheme || preferredTheme === theme) return
+    setTheme(preferredTheme)
+  }, [meQuery.data?.uiPreferences?.themePreset, setTheme, theme])
 
   useEffect(() => {
     if (!mobileSidebarOpen) return
@@ -135,6 +153,8 @@ function App() {
       : 'Synced'
 
   const syncBadgeVariant = sync.pendingCount > 0 ? 'secondary' : 'outline'
+  const workspaceName = meQuery.data?.uiPreferences?.workspaceName || 'Study Hub'
+  const avatar = meQuery.data?.uiPreferences?.avatar || '✨'
 
   const renderActivePage = () => {
     if (activeNav === 'Settings') return <SettingsPage />
@@ -172,10 +192,10 @@ function App() {
           <div className="flex h-14 items-center justify-between gap-2 px-1">
             <div className="flex items-center gap-2 overflow-hidden">
               <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/20 text-primary">
-                <Sparkles className="h-4 w-4" />
+                <span className="text-base leading-none">{avatar}</span>
               </div>
               <div className={cn('transition-opacity', sidebarCollapsed && 'md:hidden')}>
-                <p className="text-sm font-semibold">Study Hub</p>
+                <p className="text-sm font-semibold">{workspaceName}</p>
                 <p className="text-xs text-muted-foreground">Focus Workspace</p>
               </div>
             </div>
@@ -205,7 +225,7 @@ function App() {
                   }}
                 >
                   <item.icon className="h-4 w-4 shrink-0" />
-                  <span className={cn(sidebarCollapsed && 'md:hidden')}>{item.name}</span>
+                  <span className={cn(sidebarCollapsed && 'md:hidden')}>{item.label}</span>
                 </Button>
               </motion.div>
             ))}
@@ -226,7 +246,8 @@ function App() {
               >
                 {sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
               </Button>
-              <p className="text-sm font-medium text-muted-foreground">{activeNav}</p>
+              <p className="text-sm font-medium text-muted-foreground">{navLabels[activeNav]}</p>
+              <Badge variant="outline" className="hidden md:inline-flex">{avatar} {workspaceName}</Badge>
             </div>
 
             <div className="flex items-center gap-2 md:gap-3">
@@ -267,7 +288,7 @@ function App() {
                   setStartTimerSignal((current) => current + 1)
                 }}
               >
-                Start Timer
+                ▶️ Start Timer
               </Button>
               <Button variant="outline" size="icon" onClick={() => setShortcutsOpen(true)} aria-label="Show shortcuts">
                 ?
@@ -294,7 +315,7 @@ function App() {
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Keyboard Shortcuts</DialogTitle>
+            <DialogTitle>⌨️ Keyboard Shortcuts</DialogTitle>
             <DialogDescription>Use shortcuts to move faster across the app.</DialogDescription>
           </DialogHeader>
           <div className="mt-3 space-y-2 rounded-lg border border-border/70 bg-background/70 p-3 text-sm">

@@ -79,7 +79,7 @@ export function InsightsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Lock className="h-4 w-4 text-primary" />
-            Insights Locked
+            🔒 Insights Locked
           </CardTitle>
           <CardDescription>
             Log a few more sessions and we will unlock your personalized learning patterns.
@@ -178,7 +178,7 @@ export function InsightsPage() {
 
       <Card className="shadow-soft">
         <CardHeader>
-          <CardTitle>AI-style Recommendations</CardTitle>
+          <CardTitle>💡 AI-style Recommendations</CardTitle>
           <CardDescription>{insights.explanation}</CardDescription>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">
@@ -202,7 +202,7 @@ export function InsightsPage() {
       <section className="grid gap-4 lg:grid-cols-2">
         <Card className="shadow-soft">
           <CardHeader>
-            <CardTitle>Minutes by Weekday</CardTitle>
+            <CardTitle>📈 Minutes by Weekday</CardTitle>
             <CardDescription>Your strongest weekday pattern.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
@@ -220,7 +220,7 @@ export function InsightsPage() {
 
         <Card className="shadow-soft">
           <CardHeader>
-            <CardTitle>Minutes by Hour Range</CardTitle>
+            <CardTitle>⏰ Minutes by Hour Range</CardTitle>
             <CardDescription>When your focus tends to peak.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
@@ -241,7 +241,7 @@ export function InsightsPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Coffee className="h-4 w-4 text-primary" />
-            Session & Productivity Trend
+            ☕ Session & Productivity Trend
           </CardTitle>
           <CardDescription>Trend lines used for burnout analysis.</CardDescription>
         </CardHeader>

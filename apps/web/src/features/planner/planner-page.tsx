@@ -1,10 +1,22 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarPlus2, ChevronLeft, ChevronRight, Clock3, GripVertical, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Bell, CalendarPlus2, ChevronLeft, ChevronRight, Clock3, GripVertical, ListChecks, Pencil, Plus, Target, Trash2 } from 'lucide-react'
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
-import type { CreatePlannerBlockDto, PlannerBlockDto } from '@/api/dtos'
+import type { CreatePlannerBlockDto, OrganizationTaskDto, PlannerBlockDto } from '@/api/dtos'
+import {
+  createOrganizationReminder,
+  createOrganizationScheduleBlock,
+  createOrganizationTask,
+  createTaskSubtask,
+  getOrganizationReminders,
+  getOrganizationScheduleBlocks,
+  getOrganizationTasks,
+  getOrganizationUnified,
+  updateOrganizationTask,
+  updateTaskSubtask,
+} from '@/api/organization'
 import {
   createPlannerBlock,
   deletePlannerBlock,
@@ -45,6 +57,22 @@ type PlannerFormState = {
   courseId: string
   activityId: string
   note: string
+}
+
+type TaskComposerState = {
+  title: string
+  dueAt: string
+  kind: 'task' | 'exam'
+  priority: 'low' | 'medium' | 'high'
+  subtasks: string
+}
+
+type ScheduleComposerState = {
+  title: string
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+  rotationIntervalDays: string
 }
 
 function toDateKey(date: Date) {
@@ -330,10 +358,25 @@ export function PlannerPage() {
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()))
   const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null)
   const [editorState, setEditorState] = useState<PlannerEditorState | null>(null)
+  const [taskComposer, setTaskComposer] = useState<TaskComposerState>({
+    title: '',
+    dueAt: '',
+    kind: 'task',
+    priority: 'medium',
+    subtasks: '',
+  })
+  const [scheduleComposer, setScheduleComposer] = useState<ScheduleComposerState>({
+    title: '',
+    dayOfWeek: 1,
+    startTime: '16:00',
+    endTime: '17:00',
+    rotationIntervalDays: '',
+  })
 
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const weekFrom = weekStart.toISOString()
   const weekTo = addDays(weekStart, 7).toISOString()
+  const timelineTo = addDays(weekStart, 14).toISOString()
 
   const blocksQuery = useQuery({
     queryKey: [...plannerBlocksKey, weekFrom, weekTo],
@@ -343,6 +386,22 @@ export function PlannerPage() {
   const overviewQuery = useQuery({
     queryKey: [...plannerOverviewKey, weekFrom, weekTo],
     queryFn: ({ signal }) => getPlannerOverview({ from: weekFrom, to: weekTo }, signal),
+  })
+  const tasksQuery = useQuery({
+    queryKey: ['org-tasks', weekFrom, timelineTo],
+    queryFn: ({ signal }) => getOrganizationTasks({ from: weekFrom, to: timelineTo }, signal),
+  })
+  const remindersQuery = useQuery({
+    queryKey: ['org-reminders'],
+    queryFn: ({ signal }) => getOrganizationReminders(signal),
+  })
+  const scheduleBlocksQuery = useQuery({
+    queryKey: ['org-schedule-blocks'],
+    queryFn: ({ signal }) => getOrganizationScheduleBlocks(signal),
+  })
+  const unifiedQuery = useQuery({
+    queryKey: ['org-unified', weekFrom, timelineTo],
+    queryFn: ({ signal }) => getOrganizationUnified({ from: weekFrom, to: timelineTo }, signal),
   })
 
   const deleteMutation = useMutation({
@@ -395,6 +454,75 @@ export function PlannerPage() {
     },
   })
 
+  const createTaskMutation = useMutation({
+    mutationFn: createOrganizationTask,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
+      setTaskComposer({
+        title: '',
+        dueAt: '',
+        kind: 'task',
+        priority: 'medium',
+        subtasks: '',
+      })
+      toast({ variant: 'success', title: 'Task added' })
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not add task' }),
+  })
+
+  const updateTaskMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof updateOrganizationTask>[1] }) =>
+      updateOrganizationTask(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
+    },
+  })
+
+  const updateSubtaskMutation = useMutation({
+    mutationFn: ({ taskId, subtaskId, done }: { taskId: string; subtaskId: string; done: boolean }) =>
+      updateTaskSubtask(taskId, subtaskId, { done }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+    },
+  })
+
+  const createSubtaskMutation = useMutation({
+    mutationFn: ({ taskId, title }: { taskId: string; title: string }) =>
+      createTaskSubtask(taskId, title),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+    },
+  })
+
+  const createReminderMutation = useMutation({
+    mutationFn: createOrganizationReminder,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-reminders'] })
+      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
+      toast({ variant: 'success', title: 'Reminder created' })
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not create reminder' }),
+  })
+
+  const createScheduleBlockMutation = useMutation({
+    mutationFn: createOrganizationScheduleBlock,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-schedule-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
+      setScheduleComposer({
+        title: '',
+        dayOfWeek: 1,
+        startTime: '16:00',
+        endTime: '17:00',
+        rotationIntervalDays: '',
+      })
+      toast({ variant: 'success', title: 'Schedule block added' })
+    },
+    onError: () => toast({ variant: 'error', title: 'Could not add schedule block' }),
+  })
+
   const blocksByDay = useMemo(() => {
     const map = new Map<string, PlannerBlockDto[]>()
     const items = blocksQuery.data ?? []
@@ -424,6 +552,36 @@ export function PlannerPage() {
     day: 'numeric',
     year: 'numeric',
   })}`
+
+  const tasks = tasksQuery.data ?? []
+  const reminders = remindersQuery.data ?? []
+  const unifiedItems = unifiedQuery.data ?? []
+  const scheduleBlocks = scheduleBlocksQuery.data ?? []
+
+  const upcomingAlerts = useMemo(() => {
+    const now = Date.now()
+    const inSevenDays = now + 7 * 24 * 60 * 60 * 1000
+    const dueTasks = tasks
+      .filter((task) => task.dueAt)
+      .map((task) => ({ type: 'task' as const, title: task.kind === 'exam' ? `Exam: ${task.title}` : task.title, at: new Date(task.dueAt ?? '').getTime() }))
+      .filter((item) => item.at >= now && item.at <= inSevenDays)
+
+    const dueReminders = reminders
+      .filter((reminder) => reminder.nextTriggerAt)
+      .map((reminder) => ({ type: 'reminder' as const, title: reminder.title, at: new Date(reminder.nextTriggerAt ?? '').getTime() }))
+      .filter((item) => item.at >= now && item.at <= inSevenDays)
+
+    return [...dueTasks, ...dueReminders].sort((a, b) => a.at - b.at).slice(0, 8)
+  }, [reminders, tasks])
+
+  const onToggleSubtask = (task: OrganizationTaskDto, subtaskId: string, done: boolean) => {
+    updateSubtaskMutation.mutate({ taskId: task.id, subtaskId, done })
+    const total = Math.max(1, task.subtasks.length)
+    const completed = task.subtasks.reduce((sum, sub) => sum + (sub.id === subtaskId ? (done ? 1 : 0) : sub.done ? 1 : 0), 0)
+    const progress = Math.round((completed / total) * 100)
+    const status = progress >= 100 ? 'done' : progress > 0 ? 'in_progress' : 'todo'
+    updateTaskMutation.mutate({ id: task.id, payload: { progress, status } })
+  }
 
   const handleDrop = (targetDate: Date) => {
     if (!draggingBlockId || !blocksQuery.data) return
@@ -493,7 +651,7 @@ export function PlannerPage() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <CalendarPlus2 className="h-4 w-4 text-primary" />
-                Study Planner
+                🗓️ Study Planner
               </CardTitle>
               <CardDescription>Plan future study blocks, drag to adjust your week, and compare planned vs actual.</CardDescription>
             </div>
@@ -536,9 +694,311 @@ export function PlannerPage() {
         </CardContent>
       </Card>
 
+      <section className="grid gap-4 xl:grid-cols-12">
+        <Card className="shadow-soft xl:col-span-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Bell className="h-4 w-4 text-primary" />
+              Deadline Alerts
+            </CardTitle>
+            <CardDescription>Upcoming tasks, exams, and reminders in the next 7 days.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {upcomingAlerts.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                No upcoming alerts. Add task deadlines or reminders.
+              </p>
+            ) : (
+              upcomingAlerts.map((alert, index) => (
+                <div key={`${alert.type}-${alert.title}-${index}`} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                  <p className="text-sm font-medium">{alert.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {alert.type} • {new Date(alert.at).toLocaleString()}
+                  </p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-soft xl:col-span-8">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Clock3 className="h-4 w-4 text-primary" />
+              Unified Schedule Timeline
+            </CardTitle>
+            <CardDescription>Planner blocks, sessions, reminders, tasks, and rotating timetable in one view.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {unifiedQuery.isPending ? (
+              <Skeleton className="h-24 w-full" />
+            ) : unifiedItems.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                Timeline is empty for this range.
+              </p>
+            ) : (
+              unifiedItems.slice(0, 16).map((item) => (
+                <div key={item.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{item.title}</p>
+                    <Badge variant="outline">{item.type}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(item.startTime).toLocaleString()}
+                    {item.endTime ? ` - ${new Date(item.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{item.meta}</p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-12">
+        <Card className="shadow-soft xl:col-span-5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ListChecks className="h-4 w-4 text-primary" />
+              Tasks & Exams
+            </CardTitle>
+            <CardDescription>Create deadlines with subtasks and track progress.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={taskComposer.title}
+                onChange={(event) => setTaskComposer((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Task title"
+              />
+              <Input
+                type="datetime-local"
+                value={taskComposer.dueAt}
+                onChange={(event) => setTaskComposer((current) => ({ ...current, dueAt: event.target.value }))}
+              />
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+                value={taskComposer.kind}
+                onChange={(event) => setTaskComposer((current) => ({ ...current, kind: event.target.value as 'task' | 'exam' }))}
+              >
+                <option value="task">Task</option>
+                <option value="exam">Exam</option>
+              </select>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+                value={taskComposer.priority}
+                onChange={(event) => setTaskComposer((current) => ({ ...current, priority: event.target.value as 'low' | 'medium' | 'high' }))}
+              >
+                <option value="high">High priority</option>
+                <option value="medium">Medium priority</option>
+                <option value="low">Low priority</option>
+              </select>
+            </div>
+            <Input
+              value={taskComposer.subtasks}
+              onChange={(event) => setTaskComposer((current) => ({ ...current, subtasks: event.target.value }))}
+              placeholder="Subtasks separated by commas"
+            />
+            <Button
+              onClick={() =>
+                createTaskMutation.mutate({
+                  title: taskComposer.title.trim(),
+                  dueAt: taskComposer.dueAt ? new Date(taskComposer.dueAt).toISOString() : undefined,
+                  kind: taskComposer.kind,
+                  priority: taskComposer.priority,
+                  status: 'todo',
+                  subtasks: taskComposer.subtasks
+                    .split(',')
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+                    .map((title) => ({ title })),
+                })
+              }
+              disabled={!taskComposer.title.trim() || createTaskMutation.isPending}
+            >
+              <Plus className="h-4 w-4" />
+              Add task
+            </Button>
+
+            <div className="space-y-2">
+              {tasksQuery.isPending ? (
+                <Skeleton className="h-20 w-full" />
+              ) : tasks.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                  No tasks yet.
+                </p>
+              ) : (
+                tasks.slice(0, 8).map((task) => (
+                  <div key={task.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">{task.kind === 'exam' ? `Exam: ${task.title}` : task.title}</p>
+                      <Badge variant="outline">{task.progress}%</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {task.dueAt ? new Date(task.dueAt).toLocaleString() : 'No deadline'} • {task.priority}
+                    </p>
+                    <div className="mt-2 h-2 rounded-full bg-secondary">
+                      <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${task.progress}%` }} />
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {task.subtasks.map((sub) => (
+                        <label key={sub.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={sub.done}
+                            onChange={(event) => onToggleSubtask(task, sub.id, event.target.checked)}
+                          />
+                          <span className={cn(sub.done && 'line-through')}>{sub.title}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Input
+                        placeholder="Add subtask"
+                        className="h-8 text-xs"
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter') return
+                          const target = event.currentTarget
+                          const value = target.value.trim()
+                          if (!value) return
+                          createSubtaskMutation.mutate({ taskId: task.id, title: value })
+                          target.value = ''
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          createReminderMutation.mutate({
+                            taskId: task.id,
+                            title: `${task.kind === 'exam' ? 'Exam' : 'Task'} reminder: ${task.title}`,
+                            remindAt: task.dueAt ?? new Date().toISOString(),
+                          })
+                        }
+                      >
+                        Remind
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-soft xl:col-span-7">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Target className="h-4 w-4 text-primary" />
+              Custom Timetable Builder
+            </CardTitle>
+            <CardDescription>Create block schedules and optional rotations for recurring study structure.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-2 sm:grid-cols-5">
+              <Input
+                className="sm:col-span-2"
+                value={scheduleComposer.title}
+                onChange={(event) => setScheduleComposer((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Block title"
+              />
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+                value={scheduleComposer.dayOfWeek}
+                onChange={(event) => setScheduleComposer((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))}
+              >
+                {weekdayLabels.map((day, index) => (
+                  <option key={day} value={index + 1}>{day}</option>
+                ))}
+              </select>
+              <Input
+                type="time"
+                value={scheduleComposer.startTime}
+                onChange={(event) => setScheduleComposer((current) => ({ ...current, startTime: event.target.value }))}
+              />
+              <Input
+                type="time"
+                value={scheduleComposer.endTime}
+                onChange={(event) => setScheduleComposer((current) => ({ ...current, endTime: event.target.value }))}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="w-44"
+                type="number"
+                min={0}
+                value={scheduleComposer.rotationIntervalDays}
+                onChange={(event) => setScheduleComposer((current) => ({ ...current, rotationIntervalDays: event.target.value }))}
+                placeholder="Rotate every N days"
+              />
+              <Button
+                onClick={() =>
+                  createScheduleBlockMutation.mutate({
+                    title: scheduleComposer.title.trim(),
+                    dayOfWeek: scheduleComposer.dayOfWeek,
+                    startTime: scheduleComposer.startTime,
+                    endTime: scheduleComposer.endTime,
+                    rotationIntervalDays: scheduleComposer.rotationIntervalDays
+                      ? Math.max(1, Number(scheduleComposer.rotationIntervalDays))
+                      : undefined,
+                  })
+                }
+                disabled={!scheduleComposer.title.trim() || createScheduleBlockMutation.isPending}
+              >
+                <Plus className="h-4 w-4" />
+                Add block schedule
+              </Button>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              {scheduleBlocksQuery.isPending ? (
+                <>
+                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-16 w-full" />
+                </>
+              ) : scheduleBlocks.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground sm:col-span-2">
+                  No timetable blocks yet.
+                </p>
+              ) : (
+                scheduleBlocks.slice(0, 10).map((block) => (
+                  <div key={block.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">{block.title}</p>
+                      <Badge variant="outline">{weekdayLabels[Math.max(0, block.dayOfWeek - 1)]}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {block.startTime} - {block.endTime}
+                      {block.rotationIntervalDays ? ` • rotates every ${block.rotationIntervalDays}d` : ''}
+                    </p>
+                    <div className="mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const nextReminder = new Date()
+                          nextReminder.setMinutes(nextReminder.getMinutes() + 30)
+                          createReminderMutation.mutate({
+                            title: `Study session reminder: ${block.title}`,
+                            remindAt: nextReminder.toISOString(),
+                          })
+                        }}
+                      >
+                        <Bell className="h-3.5 w-3.5" />
+                        Reminder
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
       <Card className="shadow-soft">
         <CardHeader>
-          <CardTitle>Weekly Schedule</CardTitle>
+          <CardTitle>📆 Weekly Schedule</CardTitle>
           <CardDescription>Drag any block to another day. Click a block to edit details.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-7">

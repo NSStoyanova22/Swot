@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Calendar, Clock3, ListChecks, NotebookPen, PlusCircle, Search } from 'lucide-react'
+import { Calendar, Clock3, NotebookPen, PlusCircle, Search } from 'lucide-react'
 
 import { createSessionDistraction, getSessionDistractions } from '@/api/distractions'
 import { getActivities } from '@/api/activities'
@@ -549,7 +549,7 @@ export function SessionsPage({ openCreateSignal = 0 }: { openCreateSignal?: numb
     <section className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
-          <h2 className="text-xl font-semibold">Sessions</h2>
+          <h2 className="text-xl font-semibold">📝 Sessions</h2>
           <p className="text-sm text-muted-foreground">
             Review your study logs and add missed sessions with precision.
           </p>
@@ -575,8 +575,8 @@ export function SessionsPage({ openCreateSignal = 0 }: { openCreateSignal?: numb
       <Card className="shadow-soft">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <ListChecks className="h-4 w-4 text-primary" />
-            Session Log
+           
+            📚 Session Log
           </CardTitle>
           <CardDescription>Track date, time window, duration, and context for each study block.</CardDescription>
         </CardHeader>

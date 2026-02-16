@@ -83,6 +83,12 @@ export function CoursesPage() {
     [activities, selectedCourseId],
   )
 
+  useEffect(() => {
+    // Keep the activity editor scoped to the currently selected course.
+    setEditingActivityId(null)
+    setEditingActivityName('')
+  }, [selectedCourseId])
+
   const createCourseMutation = useMutation({
     mutationFn: createCourse,
     onSuccess: () => {
@@ -171,7 +177,7 @@ export function CoursesPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-primary" />
-            Courses
+            📚 Courses
           </CardTitle>
           <CardDescription>Create, rename, and manage your course catalog.</CardDescription>
         </CardHeader>
@@ -200,9 +206,22 @@ export function CoursesPage() {
                 <div
                   key={course.id}
                   className={cn(
-                    'rounded-lg border border-border/70 bg-background/75 p-3 transition-colors',
+                    'cursor-pointer rounded-lg border border-border/70 bg-background/75 p-3 transition-colors',
                     isSelected && 'border-primary/50 bg-primary/5',
                   )}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (isEditing) return
+                    setSelectedCourseId(course.id)
+                  }}
+                  onKeyDown={(event) => {
+                    if (isEditing) return
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelectedCourseId(course.id)
+                    }
+                  }}
                 >
                   <div className="flex items-center justify-between gap-2">
                     {isEditing ? (
@@ -226,6 +245,7 @@ export function CoursesPage() {
                         <>
                           <Button
                             size="sm"
+                            type="button"
                             onClick={() => updateCourseMutation.mutate({ id: course.id, name: editingCourseName.trim() })}
                             disabled={!editingCourseName.trim() || updateCourseMutation.isPending}
                           >
@@ -234,6 +254,7 @@ export function CoursesPage() {
                           <Button
                             size="sm"
                             variant="outline"
+                            type="button"
                             onClick={() => {
                               setEditingCourseId(null)
                               setEditingCourseName('')
@@ -247,7 +268,9 @@ export function CoursesPage() {
                           <Button
                             size="icon"
                             variant="ghost"
+                            type="button"
                             onClick={() => {
+                              setSelectedCourseId(course.id)
                               setEditingCourseId(course.id)
                               setEditingCourseName(course.name)
                             }}
@@ -257,7 +280,11 @@ export function CoursesPage() {
                           <Button
                             size="icon"
                             variant="ghost"
-                            onClick={() => deleteCourseMutation.mutate(course.id)}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              deleteCourseMutation.mutate(course.id)
+                            }}
                             disabled={deleteCourseMutation.isPending}
                           >
                             <Trash2 className="h-4 w-4" />

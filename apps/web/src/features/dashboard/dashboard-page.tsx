@@ -1,4 +1,5 @@
 import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { motion } from 'framer-motion'
 import { useQuery } from '@tanstack/react-query'
 import {
   Award,
@@ -110,19 +111,19 @@ const widgetLabel: Record<WidgetId, string> = {
   timeAnalysis: 'Time Analysis',
 }
 
-const widgetSpanClass: Record<WidgetId, string> = {
-  today: 'md:col-span-1 xl:col-span-1',
-  week: 'md:col-span-1 xl:col-span-1',
-  month: 'md:col-span-1 xl:col-span-1',
-  streak: 'md:col-span-1 xl:col-span-1',
-  productivity: 'md:col-span-1 xl:col-span-1',
-  prediction: 'md:col-span-1 xl:col-span-1',
-  medals: 'md:col-span-1 xl:col-span-1',
-  focusInsights: 'md:col-span-2 xl:col-span-3',
-  heatmap: 'md:col-span-2 xl:col-span-6',
-  trend: 'md:col-span-2 xl:col-span-3',
-  courseChart: 'md:col-span-2 xl:col-span-3',
-  timeAnalysis: 'md:col-span-2 xl:col-span-3',
+const widgetLayoutClass: Record<WidgetId, string> = {
+  today: 'col-span-1',
+  week: 'col-span-1',
+  month: 'col-span-1',
+  streak: 'col-span-1',
+  productivity: 'col-span-1',
+  prediction: 'col-span-1',
+  medals: 'col-span-1',
+  focusInsights: 'md:col-span-2 xl:col-span-2',
+  heatmap: 'md:col-span-2 xl:col-span-3',
+  trend: 'md:col-span-2 xl:col-span-2',
+  courseChart: 'md:col-span-2 xl:col-span-2',
+  timeAnalysis: 'md:col-span-2 xl:col-span-2',
 }
 
 function startOfDay(date: Date) {
@@ -218,7 +219,7 @@ function Tile({
   extra?: ReactNode
 }) {
   return (
-    <Card className="shadow-soft">
+    <Card className="dashboard-widget h-full shadow-soft">
       <CardHeader className="pb-3">
         <CardDescription className="flex items-center justify-between">
           {title}
@@ -512,7 +513,7 @@ export function DashboardPage() {
   const widgetContent: Record<WidgetId, ReactNode> = {
     today: (
       <Tile
-        title="Today Minutes"
+        title="📅 Today Minutes"
         value={formatMinutes(metrics.todayMinutes)}
         description={`Target: ${formatMinutes(todayTarget)}`}
         icon={Timer}
@@ -530,14 +531,14 @@ export function DashboardPage() {
       />
     ),
     week: (
-      <Tile title="Week Minutes" value={formatMinutes(metrics.weekMinutes)} description="Monday to today" icon={CalendarDays} />
+      <Tile title="🗓️ Week Minutes" value={formatMinutes(metrics.weekMinutes)} description="Monday to today" icon={CalendarDays} />
     ),
     month: (
-      <Tile title="Month Minutes" value={formatMinutes(metrics.monthMinutes)} description="Current month total" icon={Goal} />
+      <Tile title="📆 Month Minutes" value={formatMinutes(metrics.monthMinutes)} description="Current month total" icon={Goal} />
     ),
     streak: (
       <Tile
-        title="Streak"
+        title="🔥 Streak"
         value={`${streak?.currentStreak ?? 0} day${(streak?.currentStreak ?? 0) === 1 ? '' : 's'}`}
         description={`Longest: ${streak?.longestStreak ?? 0} • Missed: ${streak?.missedDays ?? 0}`}
         icon={Flame}
@@ -545,7 +546,7 @@ export function DashboardPage() {
     ),
     productivity: (
       <Tile
-        title="Productivity"
+        title="⚡ Productivity"
         value={`${productivityQuery.data?.todayScore ?? 0}/100`}
         description={`Weekly avg: ${Math.round(productivityQuery.data?.weeklyAverage ?? 0)}`}
         icon={Goal}
@@ -566,7 +567,7 @@ export function DashboardPage() {
     ),
     prediction: (
       <Tile
-        title="Tomorrow Prediction"
+        title="🔮 Tomorrow Prediction"
         value={formatMinutes(predictionQuery.data?.predictedMinutes ?? 0)}
         description={`Study probability: ${Math.round((predictionQuery.data?.studyProbability ?? 0) * 100)}%`}
         icon={Sparkles}
@@ -590,7 +591,7 @@ export function DashboardPage() {
     ),
     medals: (
       <Tile
-        title="Medals"
+        title="🏅 Medals"
         value={`${metrics.medals.gold + metrics.medals.silver + metrics.medals.bronze}`}
         description="Daily performance awards"
         icon={Award}
@@ -610,9 +611,9 @@ export function DashboardPage() {
       />
     ),
     focusInsights: (
-      <Card className="shadow-soft">
+      <Card className="dashboard-widget h-full shadow-soft">
         <CardHeader>
-          <CardTitle>Focus Insights</CardTitle>
+          <CardTitle>🎯 Focus Insights</CardTitle>
           <CardDescription>
             Distractions in the last {distractionQuery.data?.days ?? 30} days.
           </CardDescription>
@@ -642,11 +643,11 @@ export function DashboardPage() {
       </Card>
     ),
     heatmap: (
-      <Card className="shadow-soft">
+      <Card className="dashboard-widget h-full shadow-soft">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle>Study Heatmap</CardTitle>
+              <CardTitle>🟪 Study Heatmap</CardTitle>
               <CardDescription>
                 GitHub-style year view. Hover cells for minutes and sessions.
               </CardDescription>
@@ -724,9 +725,9 @@ export function DashboardPage() {
       </Card>
     ),
     trend: (
-      <Card className="shadow-soft">
+      <Card className="dashboard-widget h-full shadow-soft">
         <CardHeader>
-          <CardTitle>Weekly Productivity Trend</CardTitle>
+          <CardTitle>📈 Weekly Productivity Trend</CardTitle>
           <CardDescription>
             Score drivers: target {productivityQuery.data?.explanation.targetCompletion ?? 0}, consistency{' '}
             {productivityQuery.data?.explanation.consistency ?? 0}, session length{' '}
@@ -784,9 +785,9 @@ export function DashboardPage() {
       </Card>
     ),
     courseChart: (
-      <Card className="shadow-soft">
+      <Card className="dashboard-widget h-full shadow-soft">
         <CardHeader>
-          <CardTitle>Minutes by Course</CardTitle>
+          <CardTitle>📚 Minutes by Course</CardTitle>
           <CardDescription>Distribution of focused time across your subjects.</CardDescription>
         </CardHeader>
         <CardContent className="h-[320px]">
@@ -816,9 +817,9 @@ export function DashboardPage() {
       </Card>
     ),
     timeAnalysis: (
-      <Card className="shadow-soft">
+      <Card className="dashboard-widget h-full shadow-soft">
         <CardHeader>
-          <CardTitle>Time Analysis</CardTitle>
+          <CardTitle>⏰ Time Analysis</CardTitle>
           <CardDescription>Minutes by day of week based on your logged sessions.</CardDescription>
         </CardHeader>
         <CardContent className="h-[320px]">
@@ -841,7 +842,7 @@ export function DashboardPage() {
   }
 
   return (
-    <section className="space-y-6">
+    <section className="mx-auto w-full max-w-7xl space-y-6 px-6">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/80 p-4 shadow-soft">
         <div>
           <p className="text-xl font-semibold text-foreground">
@@ -916,15 +917,17 @@ export function DashboardPage() {
         ) : null}
       </Card>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 [grid-auto-flow:dense]">
         {visibleWidgets.map((widget) => (
-          <div
+          <motion.div
+            layout
             key={widget}
             className={cn(
-              'relative',
-              widgetSpanClass[widget],
+              'relative h-full',
+              widgetLayoutClass[widget],
               customizeMode && 'rounded-xl ring-1 ring-dashed ring-primary/35',
             )}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             draggable={customizeMode}
             onDragStart={() => setDraggingWidget(widget)}
             onDragOver={(event) => {
@@ -956,8 +959,8 @@ export function DashboardPage() {
                 </Button>
               </div>
             ) : null}
-            {widgetContent[widget]}
-          </div>
+            <div className="h-full">{widgetContent[widget]}</div>
+          </motion.div>
         ))}
       </section>
     </section>

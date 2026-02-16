@@ -75,6 +75,17 @@ export type MeDto = {
   createdAt: string
   settings: SettingsDto | null
   targets: DailyTargetDto[]
+  uiPreferences: UiPreferencesDto
+}
+
+export type UiPreferencesDto = {
+  workspaceName: string
+  avatar: string
+  accentColor: string
+  dashboardBackground: string
+  themePreset: 'pink' | 'purple' | 'dark' | 'minimal'
+  widgetStyle: 'soft' | 'glass' | 'flat'
+  layoutDensity: 'comfortable' | 'compact' | 'cozy'
 }
 
 export type UpdatePreferencesDto = {
@@ -90,6 +101,7 @@ export type UpdatePreferencesDto = {
     weekday: number
     targetMinutes: number
   }>
+  uiPreferences?: Partial<UiPreferencesDto>
 }
 
 export type TimerRecommendationDto = {
@@ -272,6 +284,113 @@ export type PlannerOverviewDto = {
   actualMinutes: number
   missedSessions: number
   varianceMinutes: number
+}
+
+export type OrganizationTaskStatus = 'todo' | 'in_progress' | 'done'
+export type OrganizationTaskKind = 'task' | 'exam'
+export type OrganizationPriority = 'low' | 'medium' | 'high'
+
+export type OrganizationSubtaskDto = {
+  id: string
+  title: string
+  done: boolean
+  sortOrder: number
+}
+
+export type OrganizationTaskDto = {
+  id: string
+  title: string
+  description: string | null
+  kind: string
+  status: string
+  progress: number
+  priority: string
+  dueAt: string | null
+  courseId: string | null
+  activityId: string | null
+  createdAt: string
+  updatedAt: string
+  subtasks: OrganizationSubtaskDto[]
+  subtaskStats: {
+    total: number
+    completed: number
+  }
+}
+
+export type CreateOrganizationTaskDto = {
+  title: string
+  description?: string
+  kind?: OrganizationTaskKind
+  status?: OrganizationTaskStatus
+  progress?: number
+  priority?: OrganizationPriority
+  dueAt?: string | null
+  courseId?: string | null
+  activityId?: string | null
+  subtasks?: Array<{ title: string }>
+}
+
+export type UpdateOrganizationTaskDto = Partial<CreateOrganizationTaskDto>
+
+export type OrganizationReminderDto = {
+  id: string
+  taskId: string | null
+  scheduleBlockId: string | null
+  title: string
+  remindAt: string
+  repeatRule: 'none' | 'daily' | 'weekly' | string
+  nextTriggerAt: string | null
+  delivered: boolean
+  lastTriggeredAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateOrganizationReminderDto = {
+  taskId?: string | null
+  scheduleBlockId?: string | null
+  title: string
+  remindAt: string
+  repeatRule?: 'none' | 'daily' | 'weekly'
+}
+
+export type OrganizationScheduleBlockDto = {
+  id: string
+  title: string
+  note: string | null
+  courseId: string | null
+  activityId: string | null
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+  rotationIntervalDays: number | null
+  rotationOffset: number
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateOrganizationScheduleBlockDto = {
+  title: string
+  note?: string
+  courseId?: string | null
+  activityId?: string | null
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+  rotationIntervalDays?: number | null
+  rotationOffset?: number
+  isActive?: boolean
+}
+
+export type OrganizationUnifiedItemDto = {
+  id: string
+  type: 'planned' | 'session' | 'task' | 'reminder' | 'schedule'
+  title: string
+  startTime: string
+  endTime: string | null
+  tone: 'default' | 'success' | 'warning' | 'danger'
+  meta: string
 }
 
 export type DistractionType = 'phone' | 'social_media' | 'noise' | 'tiredness' | 'other'

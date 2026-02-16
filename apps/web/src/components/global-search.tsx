@@ -114,7 +114,7 @@ export function GlobalSearch({
       {
         id: 'action-create-session',
         section: 'actions',
-        title: 'Create session',
+        title: '📝 Create session',
         subtitle: 'Open session logger',
         onSelect: () => {
           onNavigate('Sessions')
@@ -124,7 +124,7 @@ export function GlobalSearch({
       {
         id: 'action-start-timer',
         section: 'actions',
-        title: 'Start timer',
+        title: '⏱️ Start timer',
         subtitle: 'Start focus mode immediately',
         onSelect: () => {
           onNavigate('Timer')
@@ -142,15 +142,15 @@ export function GlobalSearch({
 
   const navigationResults = useMemo<SearchResult[]>(() => {
     const pages: Array<{ title: SearchTarget; subtitle: string }> = [
-      { title: 'Dashboard', subtitle: 'Overview and metrics' },
-      { title: 'Sessions', subtitle: 'Study logs' },
-      { title: 'Timer', subtitle: 'Pomodoro and manual timer' },
-      { title: 'Courses', subtitle: 'Course and activity management' },
-      { title: 'Planner', subtitle: 'Weekly study planning' },
-      { title: 'Calendar', subtitle: 'Monthly schedule' },
-      { title: 'Insights', subtitle: 'Learning analytics' },
-      { title: 'Achievements', subtitle: 'Badges and medals' },
-      { title: 'Settings', subtitle: 'Preferences and API status' },
+      { title: 'Dashboard', subtitle: '📊 Overview and metrics' },
+      { title: 'Sessions', subtitle: '📝 Study logs' },
+      { title: 'Timer', subtitle: '⏱️ Pomodoro and manual timer' },
+      { title: 'Courses', subtitle: '📚 Course and activity management' },
+      { title: 'Planner', subtitle: '🗓️ Weekly study planning' },
+      { title: 'Calendar', subtitle: '📅 Monthly schedule' },
+      { title: 'Insights', subtitle: '🔍 Learning analytics' },
+      { title: 'Achievements', subtitle: '🏅 Badges and medals' },
+      { title: 'Settings', subtitle: '⚙️ Preferences and API status' },
     ]
 
     return pages

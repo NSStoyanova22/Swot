@@ -78,7 +78,7 @@ export function AchievementsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Award className="h-4 w-4 text-primary" />
-              Achievements
+              🏅 Achievements
             </CardTitle>
             <CardDescription>Progress-based badges, unlocked once unless they are level-based.</CardDescription>
           </CardHeader>
@@ -93,7 +93,7 @@ export function AchievementsPage() {
 
         <Card className="shadow-soft">
           <CardHeader>
-            <CardTitle className="text-base">Daily Medals</CardTitle>
+            <CardTitle className="text-base">🥇 Daily Medals</CardTitle>
             <CardDescription>Based on total focused minutes per day.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">

@@ -7,6 +7,8 @@ import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
 import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
+import { ensureStudyOrganizationTables } from "./organization.js";
+import { ensurePersonalizationTable, getUiPreferences, upsertUiPreferences } from "./personalization.js";
 import { ensureProductivityTables, getProductivityOverview, recomputeAndStoreProductivity } from "./productivity.js";
 import { generateStudyReportPdf } from "./reports.js";
 import { routes } from "./routes.js";
@@ -21,6 +23,8 @@ await ensureStreakTables();
 await ensureProductivityTables();
 await ensureDistractionTables();
 await ensurePlannerTables();
+await ensureStudyOrganizationTables();
+await ensurePersonalizationTable();
 await ensureAdaptiveTimerTables();
 
 app.get("/health", async () => ({ ok: true, name: "Swot API" }));
@@ -53,6 +57,7 @@ app.get("/me", async () => {
   if (!me) return me;
 
   const adaptiveEnabled = await getAdaptiveEnabled(USER_ID);
+  const uiPreferences = await getUiPreferences(USER_ID);
   return {
     ...me,
     settings: me.settings
@@ -61,6 +66,7 @@ app.get("/me", async () => {
           adaptiveEnabled,
         }
       : null,
+    uiPreferences,
   };
 });
 
@@ -154,6 +160,15 @@ app.put("/me/preferences", async (req, reply) => {
       adaptiveEnabled?: boolean;
     };
     targets?: Array<{ weekday: number; targetMinutes: number }>;
+    uiPreferences?: {
+      workspaceName?: string;
+      avatar?: string;
+      accentColor?: string;
+      dashboardBackground?: string;
+      themePreset?: "pink" | "purple" | "dark" | "minimal";
+      widgetStyle?: "soft" | "glass" | "flat";
+      layoutDensity?: "comfortable" | "compact" | "cozy";
+    };
   };
 
   if (!body.settings || !body.targets) {
@@ -241,6 +256,7 @@ app.put("/me/preferences", async (req, reply) => {
   });
 
   await setAdaptiveEnabled(USER_ID, adaptiveEnabled);
+  const uiPreferences = await upsertUiPreferences(USER_ID, body.uiPreferences ?? {});
 
   await recomputeAndStoreAchievements(USER_ID);
   await recomputeAndStoreStreak(USER_ID);
@@ -258,6 +274,7 @@ app.put("/me/preferences", async (req, reply) => {
           adaptiveEnabled,
         }
       : null,
+    uiPreferences,
   };
 });
 
