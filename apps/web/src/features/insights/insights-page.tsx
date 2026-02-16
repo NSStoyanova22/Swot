@@ -285,7 +285,7 @@ export function InsightsPage() {
             <CardDescription>Your consistency rhythm across the week.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
               <BarChart data={insights.dayChart} barCategoryGap={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} />
@@ -303,7 +303,7 @@ export function InsightsPage() {
             <CardDescription>When your focus time naturally clusters.</CardDescription>
           </CardHeader>
           <CardContent className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
               <BarChart data={insights.hourChart} barCategoryGap={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
                 <XAxis dataKey="bucket" tickLine={false} axisLine={false} interval={0} fontSize={11} />

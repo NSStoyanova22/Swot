@@ -9,6 +9,7 @@ import { getMe } from '@/api/me'
 import { createSession } from '@/api/sessions'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { FocusSoundsPanel } from '@/features/timer/focus-sounds-panel'
 import {
   Dialog,
   DialogContent,
@@ -450,6 +451,8 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           </div>
         </CardContent>
       </Card>
+
+      <FocusSoundsPanel />
 
       {logModal ? (
         <LogSessionModal

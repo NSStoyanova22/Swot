@@ -23,6 +23,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/toast'
+import { useFocusSoundPreferences } from '@/hooks/use-focus-sound-preferences'
 import { useHealthQuery } from '@/hooks/use-health-query'
 import { useSessionSync } from '@/hooks/use-session-sync'
 import { type ThemeName, useTheme } from '@/hooks/use-theme'
@@ -69,6 +70,7 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
 
 export function SettingsPage() {
   const { toast } = useToast()
+  const { preferences: soundPrefs, updatePreferences: updateSoundPrefs } = useFocusSoundPreferences()
   const sync = useSessionSync()
   const { theme, setTheme, options: themeOptions } = useTheme()
   const queryClient = useQueryClient()
@@ -455,6 +457,58 @@ export function SettingsPage() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+            <p className="text-sm font-semibold">Focus Sounds Defaults</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              This saves your last selected sound for the Timer page.
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Default sound</span>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={soundPrefs.selectedSound}
+                  onChange={(event) =>
+                    updateSoundPrefs({
+                      selectedSound: event.target.value as
+                        | 'white'
+                        | 'rain'
+                        | 'cafe'
+                        | 'brown'
+                        | 'youtube',
+                    })
+                  }
+                >
+                  <option value="white">🤍 White noise</option>
+                  <option value="rain">🌧️ Rain</option>
+                  <option value="cafe">☕ Cafe ambience</option>
+                  <option value="brown">🟤 Brown noise</option>
+                  <option value="youtube">🎧 YouTube lo-fi</option>
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Default volume</span>
+                <Input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={soundPrefs.volume}
+                  onChange={(event) => updateSoundPrefs({ volume: Number(event.target.value) })}
+                />
+                <p className="text-xs text-muted-foreground">{Math.round(soundPrefs.volume * 100)}%</p>
+              </label>
+            </div>
+            <label className="mt-3 block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">YouTube embed URL (optional)</span>
+              <Input
+                value={soundPrefs.youtubeUrl}
+                onChange={(event) => updateSoundPrefs({ youtubeUrl: event.target.value })}
+                placeholder="https://www.youtube.com/embed/jfKfPfyJRdk"
+              />
+            </label>
           </div>
         </CardContent>
       </Card>

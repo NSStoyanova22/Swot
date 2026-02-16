@@ -19,12 +19,6 @@ type DistractionRow = {
   created_at: Date
 }
 
-type AnalyticsRow = {
-  type: DistractionType
-  count: number
-  total_minutes_lost: number
-}
-
 function toLabel(type: DistractionType) {
   if (type === 'social_media') return 'Social media'
   if (type === 'phone') return 'Phone'
@@ -109,38 +103,76 @@ export async function getSessionDistractions(userId: string, sessionId: string) 
 export async function getDistractionAnalytics(userId: string, days: number) {
   const safeDays = Number.isFinite(days) ? Math.max(1, Math.min(365, Math.round(days))) : 30
 
-  const rows = await prisma.$queryRaw<AnalyticsRow[]>`
-    SELECT
-      d.type,
-      COUNT(*) AS count,
-      COALESCE(SUM(d.minutes_lost), 0) AS total_minutes_lost
-    FROM session_distractions d
-    JOIN StudySession s ON s.id = d.session_id
-    WHERE d.user_id = ${userId}
-      AND s.startTime >= DATE_SUB(NOW(), INTERVAL ${safeDays} DAY)
-    GROUP BY d.type
-    ORDER BY total_minutes_lost DESC, count DESC
+  const since = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000)
+  const sessions = await prisma.studySession.findMany({
+    where: {
+      userId,
+      startTime: { gte: since },
+    },
+    select: { id: true },
+  })
+
+  if (sessions.length === 0) {
+    return {
+      days: safeDays,
+      totalMinutesLost: 0,
+      totalEvents: 0,
+      mostCommon: null,
+      byType: [],
+      suggestions: ['Distraction profile looks stable. Keep your current setup and routine.'],
+    }
+  }
+
+  const validSessionIds = new Set(sessions.map((session) => session.id))
+  const rows = await prisma.$queryRaw<DistractionRow[]>`
+    SELECT id, session_id, type, minutes_lost, note, created_at
+    FROM session_distractions
+    WHERE user_id = ${userId}
+    ORDER BY created_at DESC
   `
 
-  const totalMinutesLost = rows.reduce((sum, row) => sum + Number(row.total_minutes_lost), 0)
-  const totalEvents = rows.reduce((sum, row) => sum + Number(row.count), 0)
+  const buckets = new Map<
+    DistractionType,
+    {
+      type: DistractionType
+      count: number
+      minutesLost: number
+    }
+  >()
 
-  const top = rows[0]
+  for (const row of rows) {
+    if (!validSessionIds.has(row.session_id)) continue
+    const current = buckets.get(row.type) ?? {
+      type: row.type,
+      count: 0,
+      minutesLost: 0,
+    }
+    current.count += 1
+    current.minutesLost += Number(row.minutes_lost)
+    buckets.set(row.type, current)
+  }
+
+  const byType = Array.from(buckets.values())
+    .sort((a, b) => b.minutesLost - a.minutesLost || b.count - a.count)
+    .map((item) => ({
+      type: item.type,
+      label: toLabel(item.type),
+      count: item.count,
+      minutesLost: item.minutesLost,
+    }))
+
+  const totalMinutesLost = byType.reduce((sum, row) => sum + row.minutesLost, 0)
+  const totalEvents = byType.reduce((sum, row) => sum + row.count, 0)
+
+  const top = byType[0]
   const mostCommon = top
     ? {
         type: top.type,
         label: toLabel(top.type),
-        count: Number(top.count),
-        minutesLost: Number(top.total_minutes_lost),
+        count: top.count,
+        minutesLost: top.minutesLost,
       }
     : null
-
-  const byType = rows.map((row) => ({
-    type: row.type,
-    label: toLabel(row.type),
-    count: Number(row.count),
-    minutesLost: Number(row.total_minutes_lost),
-  }))
 
   const suggestions: string[] = []
   if (mostCommon?.type === 'phone') {

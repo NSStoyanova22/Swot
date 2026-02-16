@@ -701,7 +701,7 @@ export function DashboardPage() {
         </CardHeader>
         <CardContent className="h-[220px]">
           {productivityQuery.data?.weeklyTrend.length ? (
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
               <AreaChart data={productivityQuery.data.weeklyTrend}>
                 <defs>
                   <linearGradient id="productivityFill" x1="0" y1="0" x2="0" y2="1">
@@ -758,7 +758,7 @@ export function DashboardPage() {
           {!hasData ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to visualize.</p>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
               <PieChart>
                 <Pie
                   data={metrics.courseChart}
@@ -790,7 +790,7 @@ export function DashboardPage() {
           {!hasData ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to analyze.</p>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
               <BarChart data={metrics.weekChart} barCategoryGap={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} />
