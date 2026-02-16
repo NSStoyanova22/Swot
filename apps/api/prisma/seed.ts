@@ -86,7 +86,7 @@ async function main() {
 
   // Make 15 sessions spread over last ~5 days
   for (let i = 0; i < 15; i++) {
-    const t = templates[i % templates.length];
+    const t = templates[i % templates.length]!;
     const end = new Date(now - minutes(180 * i));
     const start = new Date(end.getTime() - minutes(t.mins + t.breakM));
     await prisma.studySession.create({

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { recomputeAndStoreAchievements } from "./achievements.js";
 import { prisma } from "./db.js";
 
 const USER_ID = "swot-user";
@@ -20,6 +21,44 @@ export async function routes(app: FastifyInstance) {
     });
   });
 
+  app.put("/courses/:id", async (req) => {
+    const params = req.params as { id: string };
+    const body = req.body as { name: string };
+    await prisma.course.findFirstOrThrow({
+      where: { id: params.id, userId: USER_ID },
+    });
+
+    return prisma.course.update({
+      where: { id: params.id },
+      data: { name: body.name.trim() },
+    });
+  });
+
+  app.delete("/courses/:id", async (req, reply) => {
+    const params = req.params as { id: string };
+
+    const sessionsCount = await prisma.studySession.count({
+      where: { userId: USER_ID, courseId: params.id },
+    });
+
+    if (sessionsCount > 0) {
+      return reply.code(409).send({
+        error:
+          "Cannot delete a course with logged sessions. Remove or reassign sessions first.",
+      });
+    }
+
+    await prisma.activity.deleteMany({
+      where: { userId: USER_ID, courseId: params.id },
+    });
+
+    await prisma.course.findFirstOrThrow({
+      where: { id: params.id, userId: USER_ID },
+    });
+
+    return prisma.course.delete({ where: { id: params.id } });
+  });
+
   // Activities
   app.get("/activities", async () => {
     return prisma.activity.findMany({
@@ -38,6 +77,41 @@ export async function routes(app: FastifyInstance) {
         name: body.name.trim(),
         color: body.color ?? "#ec4899",
       },
+    });
+  });
+
+  app.put("/activities/:id", async (req) => {
+    const params = req.params as { id: string };
+    const body = req.body as { name: string; color?: string };
+    await prisma.activity.findFirstOrThrow({
+      where: { id: params.id, userId: USER_ID },
+    });
+
+    return prisma.activity.update({
+      where: { id: params.id },
+      data: {
+        name: body.name.trim(),
+        color: body.color ?? "#ec4899",
+      },
+      include: { course: true },
+    });
+  });
+
+  app.delete("/activities/:id", async (req) => {
+    const params = req.params as { id: string };
+
+    await prisma.activity.findFirstOrThrow({
+      where: { id: params.id, userId: USER_ID },
+    });
+
+    await prisma.studySession.updateMany({
+      where: { userId: USER_ID, activityId: params.id },
+      data: { activityId: null },
+    });
+
+    return prisma.activity.delete({
+      where: { id: params.id },
+      include: { course: true },
     });
   });
 
@@ -81,7 +155,7 @@ export async function routes(app: FastifyInstance) {
       Math.round((end.getTime() - start.getTime()) / 60000) - breakM
     );
 
-    return prisma.studySession.create({
+    const created = await prisma.studySession.create({
       data: {
         userId: USER_ID,
         courseId: body.courseId,
@@ -94,5 +168,50 @@ export async function routes(app: FastifyInstance) {
       },
       include: { course: true, activity: true },
     });
+
+    await recomputeAndStoreAchievements(USER_ID);
+    return created;
+  });
+
+  app.put("/sessions/:id", async (req) => {
+    const params = req.params as { id: string };
+    const body = req.body as {
+      courseId: string;
+      activityId?: string | null;
+      startTime: string;
+      endTime: string;
+      breakMinutes?: number;
+      note?: string;
+    };
+
+    await prisma.studySession.findFirstOrThrow({
+      where: { id: params.id, userId: USER_ID },
+    });
+
+    const start = new Date(body.startTime);
+    const end = new Date(body.endTime);
+    const breakM = Math.max(0, Number(body.breakMinutes ?? 0));
+
+    const durationMinutes = Math.max(
+      0,
+      Math.round((end.getTime() - start.getTime()) / 60000) - breakM
+    );
+
+    const updated = await prisma.studySession.update({
+      where: { id: params.id },
+      data: {
+        courseId: body.courseId,
+        activityId: body.activityId ?? null,
+        startTime: start,
+        endTime: end,
+        breakMinutes: breakM,
+        durationMinutes,
+        note: body.note?.trim() || null,
+      },
+      include: { course: true, activity: true },
+    });
+
+    await recomputeAndStoreAchievements(USER_ID);
+    return updated;
   });
 }

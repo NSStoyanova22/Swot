@@ -1,68 +1,147 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --background: 347 65% 98%;
+  --foreground: 339 22% 20%;
+  --card: 0 0% 100%;
+  --card-foreground: 339 22% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 339 22% 20%;
+  --primary: 336 80% 58%;
+  --primary-foreground: 350 100% 99%;
+  --secondary: 345 60% 95%;
+  --secondary-foreground: 338 24% 24%;
+  --muted: 343 42% 94%;
+  --muted-foreground: 338 14% 43%;
+  --accent: 345 70% 92%;
+  --accent-foreground: 338 24% 24%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 350 100% 99%;
+  --border: 343 30% 88%;
+  --input: 343 30% 88%;
+  --ring: 336 80% 58%;
+  --radius: 0.9rem;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%),
+    radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+[data-theme='pink'] {
+  --background: 347 65% 98%;
+  --foreground: 339 22% 20%;
+  --card: 0 0% 100%;
+  --card-foreground: 339 22% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 339 22% 20%;
+  --primary: 336 80% 58%;
+  --primary-foreground: 350 100% 99%;
+  --secondary: 345 60% 95%;
+  --secondary-foreground: 338 24% 24%;
+  --muted: 343 42% 94%;
+  --muted-foreground: 338 14% 43%;
+  --accent: 345 70% 92%;
+  --accent-foreground: 338 24% 24%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 350 100% 99%;
+  --border: 343 30% 88%;
+  --input: 343 30% 88%;
+  --ring: 336 80% 58%;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%),
+    radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
 }
-a:hover {
-  color: #535bf2;
+
+[data-theme='neutral'] {
+  --background: 42 20% 97%;
+  --foreground: 30 10% 20%;
+  --card: 0 0% 100%;
+  --card-foreground: 30 10% 20%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 30 10% 20%;
+  --primary: 28 35% 42%;
+  --primary-foreground: 42 40% 98%;
+  --secondary: 40 24% 91%;
+  --secondary-foreground: 30 10% 20%;
+  --muted: 42 20% 92%;
+  --muted-foreground: 28 8% 40%;
+  --accent: 42 25% 88%;
+  --accent-foreground: 28 12% 24%;
+  --destructive: 0 76% 52%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 35 18% 84%;
+  --input: 35 18% 84%;
+  --ring: 28 35% 42%;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(243, 236, 224, 0.6), transparent 40%),
+    radial-gradient(circle at 90% 12%, rgba(232, 228, 220, 0.5), transparent 36%);
+}
+
+[data-theme='dark'] {
+  --background: 228 18% 11%;
+  --foreground: 220 20% 92%;
+  --card: 228 18% 14%;
+  --card-foreground: 220 20% 92%;
+  --popover: 228 18% 14%;
+  --popover-foreground: 220 20% 92%;
+  --primary: 341 82% 64%;
+  --primary-foreground: 230 24% 9%;
+  --secondary: 230 14% 22%;
+  --secondary-foreground: 220 20% 92%;
+  --muted: 228 14% 20%;
+  --muted-foreground: 226 13% 70%;
+  --accent: 232 16% 23%;
+  --accent-foreground: 220 20% 92%;
+  --destructive: 0 72% 55%;
+  --destructive-foreground: 0 0% 96%;
+  --border: 230 14% 26%;
+  --input: 230 14% 26%;
+  --ring: 341 82% 64%;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(72, 34, 52, 0.45), transparent 42%),
+    radial-gradient(circle at 100% 0%, rgba(38, 43, 64, 0.42), transparent 38%);
+}
+
+* {
+  @apply border-border;
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
+  @apply bg-background text-foreground;
+  font-family: 'Manrope', sans-serif;
+  min-height: 100vh;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+#root {
   min-height: 100vh;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+.app-surface {
+  background-image: var(--bg-accent);
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
+@layer base {
+  h1 {
+    @apply text-2xl font-semibold tracking-tight md:text-3xl;
+  }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+  h2 {
+    @apply text-xl font-semibold tracking-tight md:text-2xl;
   }
-  a:hover {
-    color: #747bff;
+
+  h3 {
+    @apply text-base font-semibold;
   }
-  button {
-    background-color: #f9f9f9;
+
+  p {
+    @apply text-sm md:text-[0.95rem];
   }
 }
