@@ -9,7 +9,7 @@ import { ensureFocusGardenTables } from "./focus-garden.js";
 import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
 import { ensureStudyOrganizationTables } from "./organization.js";
-import { ensurePersonalizationTable, getUiPreferences, upsertUiPreferences } from "./personalization.js";
+import { ensurePersonalizationTable, getUiPreferences, normalizeThemePreset, upsertUiPreferences } from "./personalization.js";
 import { ensureProductivityTables, getProductivityOverview, recomputeAndStoreProductivity } from "./productivity.js";
 import { generateStudyReportPdf } from "./reports.js";
 import { routes } from "./routes.js";
@@ -167,7 +167,18 @@ app.put("/me/preferences", async (req, reply) => {
       avatar?: string;
       accentColor?: string;
       dashboardBackground?: string;
-      themePreset?: "pink" | "purple" | "dark" | "minimal";
+      themePreset?:
+        | "system"
+        | "soft-rose"
+        | "midnight"
+        | "ocean-calm"
+        | "forest-focus"
+        | "minimal-light"
+        | "violet-studio"
+        | "pink"
+        | "purple"
+        | "dark"
+        | "minimal";
       widgetStyle?: "soft" | "glass" | "flat";
       layoutDensity?: "comfortable" | "compact" | "cozy";
     };
@@ -258,7 +269,15 @@ app.put("/me/preferences", async (req, reply) => {
   });
 
   await setAdaptiveEnabled(USER_ID, adaptiveEnabled);
-  const uiPreferences = await upsertUiPreferences(USER_ID, body.uiPreferences ?? {});
+  const nextUiPreferences = body.uiPreferences
+    ? {
+        ...body.uiPreferences,
+        themePreset: body.uiPreferences.themePreset
+          ? normalizeThemePreset(body.uiPreferences.themePreset)
+          : undefined,
+      }
+    : {};
+  const uiPreferences = await upsertUiPreferences(USER_ID, nextUiPreferences);
 
   await recomputeAndStoreAchievements(USER_ID);
   await recomputeAndStoreStreak(USER_ID);

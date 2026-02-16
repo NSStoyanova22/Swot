@@ -22,6 +22,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { GlobalSearch } from '@/components/global-search'
+import { ThemeSwitcher } from '@/components/theme-switcher'
 import { getMe } from '@/api/me'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AchievementsPage } from '@/features/achievements/achievements-page'
@@ -36,7 +37,6 @@ import { SettingsPage } from '@/features/settings/settings-page'
 import { TimerPage } from '@/features/timer/timer-page'
 import { useSessionSync } from '@/hooks/use-session-sync'
 import { useUiPersonalization } from '@/hooks/use-ui-personalization'
-import { useTheme, type ThemeName } from '@/hooks/use-theme'
 import { cn } from '@/lib/utils'
 
 const navigation = [
@@ -65,7 +65,6 @@ function App() {
   const [createSessionSignal, setCreateSessionSignal] = useState(0)
   const [startTimerSignal, setStartTimerSignal] = useState(0)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
-  const { theme, setTheme, options: themeOptions } = useTheme()
   const sync = useSessionSync()
   const meQuery = useQuery({
     queryKey: ['me'],
@@ -265,17 +264,7 @@ function App() {
                 }}
               />
 
-              <select
-                className="h-9 rounded-md border border-input bg-background px-2.5 text-xs font-medium"
-                value={theme}
-                onChange={(event) => setTheme(event.target.value as ThemeName)}
-              >
-                {themeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              <ThemeSwitcher />
 
               <Badge variant={syncBadgeVariant} className="hidden sm:inline-flex">
                 {sync.isSyncing ? <RefreshCcw className="mr-1 h-3 w-3 animate-spin" /> : null}

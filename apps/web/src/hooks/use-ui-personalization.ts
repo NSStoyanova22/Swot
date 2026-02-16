@@ -1,44 +1,42 @@
 import { useEffect } from 'react'
 
 import type { UiPreferencesDto } from '@/api/dtos'
+import { generateAccentShades, normalizeHexColor } from '@/theme/accent'
 
-function hexToHslTriplet(hex: string) {
-  const normalized = hex.replace('#', '')
-  if (normalized.length !== 6) return null
-  const r = parseInt(normalized.slice(0, 2), 16) / 255
-  const g = parseInt(normalized.slice(2, 4), 16) / 255
-  const b = parseInt(normalized.slice(4, 6), 16) / 255
-
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const delta = max - min
-  const l = (max + min) / 2
-
-  let h = 0
-  if (delta !== 0) {
-    if (max === r) h = ((g - b) / delta) % 6
-    else if (max === g) h = (b - r) / delta + 2
-    else h = (r - g) / delta + 4
-    h *= 60
-    if (h < 0) h += 360
-  }
-
-  const s = delta === 0 ? 0 : delta / (1 - Math.abs(2 * l - 1))
-  return `${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`
-}
+const legacyDefaultAccents = new Set(['#e11d77', '#1f1b1d'])
+const legacyDefaultBackground = 'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)'
 
 export function useUiPersonalization(prefs: UiPreferencesDto | null | undefined) {
   useEffect(() => {
     if (!prefs) return
     const root = document.documentElement
-    const hsl = hexToHslTriplet(prefs.accentColor)
-    if (hsl) {
-      root.style.setProperty('--primary', hsl)
-      root.style.setProperty('--ring', hsl)
+    const normalizedAccent = normalizeHexColor(prefs.accentColor)
+    if (normalizedAccent && !legacyDefaultAccents.has(normalizedAccent)) {
+      const shades = generateAccentShades(normalizedAccent)
+      if (shades) {
+        root.style.setProperty('--primary', shades.css.primary)
+        root.style.setProperty('--ring', shades.css.ring)
+        root.style.setProperty('--chart-1', shades.css.chart1)
+        root.style.setProperty('--chart-2', shades.css.chart2)
+        root.style.setProperty('--chart-3', shades.css.chart3)
+        root.style.setProperty('--card-hover', shades.css.cardHover)
+      }
+    } else {
+      root.style.removeProperty('--primary')
+      root.style.removeProperty('--ring')
+      root.style.removeProperty('--chart-1')
+      root.style.removeProperty('--chart-2')
+      root.style.removeProperty('--chart-3')
+      root.style.removeProperty('--card-hover')
     }
-    root.style.setProperty('--bg-accent', prefs.dashboardBackground)
+
+    const background = prefs.dashboardBackground.trim()
+    if (background && background !== legacyDefaultBackground) {
+      root.style.setProperty('--user-bg-accent', background)
+    } else {
+      root.style.removeProperty('--user-bg-accent')
+    }
     root.setAttribute('data-density', prefs.layoutDensity)
     root.setAttribute('data-widget-style', prefs.widgetStyle)
   }, [prefs])
 }
-

@@ -241,11 +241,11 @@ export function InsightsPage() {
           <CardContent className="h-[300px] min-w-0">
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
               <BarChart data={insights.charts.weekdayMinutes} barCategoryGap={18}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} />
                 <YAxis tickLine={false} axisLine={false} width={46} tickFormatter={(value) => `${value}m`} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="minutes" fill="#e11d77" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="minutes" fill="hsl(var(--chart-1))" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -263,7 +263,7 @@ export function InsightsPage() {
                 barCategoryGap={18}
                 margin={{ top: 8, right: 8, left: 4, bottom: isCompact ? 40 : 20 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
                 <XAxis
                   dataKey="range"
                   tickLine={false}
@@ -277,7 +277,7 @@ export function InsightsPage() {
                 />
                 <YAxis tickLine={false} axisLine={false} width={46} tickFormatter={(value) => `${value}m`} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="minutes" fill="#fb7185" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="minutes" fill="hsl(var(--chart-2))" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -295,11 +295,11 @@ export function InsightsPage() {
         <CardContent className="h-[280px]">
           <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
             <LineChart data={insights.charts.productivityTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
               <XAxis dataKey="date" tickLine={false} axisLine={false} tickFormatter={(value) => value.slice(5)} />
               <YAxis domain={[0, 100]} tickLine={false} axisLine={false} width={40} />
               <Tooltip />
-              <Line type="monotone" dataKey="score" stroke="#e11d77" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="score" stroke="hsl(var(--chart-1))" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </CardContent>

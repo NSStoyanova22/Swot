@@ -83,7 +83,7 @@ export type UiPreferencesDto = {
   avatar: string
   accentColor: string
   dashboardBackground: string
-  themePreset: 'pink' | 'purple' | 'dark' | 'minimal'
+  themePreset: 'system' | 'soft-rose' | 'midnight' | 'ocean-calm' | 'forest-focus' | 'minimal-light' | 'violet-studio' | 'pink' | 'purple' | 'dark' | 'minimal'
   widgetStyle: 'soft' | 'glass' | 'flat'
   layoutDensity: 'comfortable' | 'compact' | 'cozy'
 }

@@ -1,19 +1,31 @@
 export const THEME_STORAGE_KEY = 'swot.theme'
 const LEGACY_THEME_STORAGE_KEY = 'swot-theme'
-const DEFAULT_THEME = 'pink'
+const DEFAULT_THEME = 'soft-rose'
 
-const validThemes = ['pink', 'purple', 'dark', 'minimal'] as const
+const validThemes = ['system', 'soft-rose', 'midnight', 'ocean-calm', 'forest-focus', 'minimal-light', 'violet-studio'] as const
 
 export type AppTheme = (typeof validThemes)[number]
 
 export function normalizeTheme(value: string | null | undefined): AppTheme {
-  if (value === 'neutral') return 'minimal'
+  if (value === 'system') return 'system'
+  if (value === 'pink') return 'soft-rose'
+  if (value === 'dark') return 'midnight'
+  if (value === 'minimal' || value === 'neutral') return 'minimal-light'
+  if (value === 'purple') return 'violet-studio'
   return validThemes.includes(value as AppTheme) ? (value as AppTheme) : DEFAULT_THEME
+}
+
+export function resolveTheme(theme: AppTheme) {
+  if (theme !== 'system') return theme
+  if (typeof window === 'undefined') return 'minimal-light'
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'midnight' : 'minimal-light'
 }
 
 export function applyTheme(theme: AppTheme) {
   if (typeof document === 'undefined') return
-  document.documentElement.setAttribute('data-theme', theme)
+  const resolvedTheme = resolveTheme(theme)
+  document.documentElement.setAttribute('data-theme', resolvedTheme)
+  document.documentElement.setAttribute('data-theme-mode', theme)
 }
 
 export function getStoredTheme(): AppTheme {

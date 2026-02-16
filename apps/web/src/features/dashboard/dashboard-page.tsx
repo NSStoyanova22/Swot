@@ -49,7 +49,14 @@ const sessionsQueryKey = ['sessions'] as const
 const meQueryKey = ['me'] as const
 
 const schoolLabels = ['School Year 2025/26 - Grade 10', 'School Year 2025/26 - Grade 11', 'School Year 2025/26 - Grade 12']
-const fallbackCourseColors = ['#e11d77', '#fb7185', '#f43f5e', '#fda4af', '#ec4899', '#be185d']
+const fallbackCourseColors = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+  'hsl(var(--primary))',
+]
 const dashboardOrderStorageKey = 'swot-dashboard-widget-order-v1'
 const dashboardEnabledStorageKey = 'swot-dashboard-widget-enabled-v1'
 
@@ -742,11 +749,11 @@ export function DashboardPage() {
               <AreaChart data={productivityQuery.data.weeklyTrend}>
                 <defs>
                   <linearGradient id="productivityFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ec4899" stopOpacity={0.45} />
-                    <stop offset="100%" stopColor="#ec4899" stopOpacity={0.05} />
+                    <stop offset="0%" stopColor="hsl(var(--chart-glow))" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="hsl(var(--chart-glow))" stopOpacity={0.05} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
                 <XAxis
                   dataKey="date"
                   tickLine={false}
@@ -776,7 +783,7 @@ export function DashboardPage() {
                     )
                   }}
                 />
-                <Area type="monotone" dataKey="score" stroke="#e11d77" fill="url(#productivityFill)" />
+                <Area type="monotone" dataKey="score" stroke="hsl(var(--chart-1))" fill="url(#productivityFill)" />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -829,11 +836,11 @@ export function DashboardPage() {
           ) : (
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
               <BarChart data={metrics.weekChart} barCategoryGap={18}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} />
                 <YAxis tickFormatter={(value) => `${value}m`} tickLine={false} axisLine={false} width={46} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="minutes" fill="#e11d77" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="minutes" fill="hsl(var(--chart-1))" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}

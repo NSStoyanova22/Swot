@@ -5,7 +5,14 @@ export type UiPreferences = {
   avatar: string;
   accentColor: string;
   dashboardBackground: string;
-  themePreset: "pink" | "purple" | "dark" | "minimal";
+  themePreset:
+    | "system"
+    | "soft-rose"
+    | "midnight"
+    | "ocean-calm"
+    | "forest-focus"
+    | "minimal-light"
+    | "violet-studio";
   widgetStyle: "soft" | "glass" | "flat";
   layoutDensity: "comfortable" | "compact" | "cozy";
 };
@@ -16,10 +23,21 @@ export const defaultUiPreferences: UiPreferences = {
   accentColor: "#e11d77",
   dashboardBackground:
     "radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)",
-  themePreset: "pink",
+  themePreset: "soft-rose",
   widgetStyle: "soft",
   layoutDensity: "comfortable",
 };
+
+export function normalizeThemePreset(value: string | undefined): UiPreferences["themePreset"] {
+  if (value === "system" || value === "soft-rose" || value === "midnight" || value === "ocean-calm" || value === "forest-focus" || value === "minimal-light" || value === "violet-studio") {
+    return value;
+  }
+  if (value === "pink") return "soft-rose";
+  if (value === "dark") return "midnight";
+  if (value === "minimal") return "minimal-light";
+  if (value === "purple") return "violet-studio";
+  return defaultUiPreferences.themePreset;
+}
 
 export async function ensurePersonalizationTable() {
   await prisma.$executeRawUnsafe(`
@@ -29,7 +47,7 @@ export async function ensurePersonalizationTable() {
       avatar VARCHAR(32) NOT NULL DEFAULT '✨',
       accent_color VARCHAR(16) NOT NULL DEFAULT '#e11d77',
       dashboard_background TEXT NULL,
-      theme_preset VARCHAR(32) NOT NULL DEFAULT 'pink',
+      theme_preset VARCHAR(32) NOT NULL DEFAULT 'soft-rose',
       widget_style VARCHAR(32) NOT NULL DEFAULT 'soft',
       layout_density VARCHAR(32) NOT NULL DEFAULT 'comfortable',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -64,12 +82,7 @@ export async function getUiPreferences(userId: string): Promise<UiPreferences> {
     accentColor: row.accent_color || defaultUiPreferences.accentColor,
     dashboardBackground:
       row.dashboard_background || defaultUiPreferences.dashboardBackground,
-    themePreset:
-      row.theme_preset === "purple" ||
-      row.theme_preset === "dark" ||
-      row.theme_preset === "minimal"
-        ? row.theme_preset
-        : "pink",
+    themePreset: normalizeThemePreset(row.theme_preset),
     widgetStyle:
       row.widget_style === "glass" || row.widget_style === "flat"
         ? row.widget_style
@@ -117,4 +130,3 @@ export async function upsertUiPreferences(
 
   return getUiPreferences(userId);
 }
-

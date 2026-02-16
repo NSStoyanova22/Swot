@@ -29,6 +29,8 @@ import { useHealthQuery } from '@/hooks/use-health-query'
 import { useSessionSync } from '@/hooks/use-session-sync'
 import { useUiPersonalization } from '@/hooks/use-ui-personalization'
 import { type ThemeName, useTheme } from '@/hooks/use-theme'
+import { generateAccentShades, normalizeHexColor } from '@/theme/accent'
+import { normalizeTheme } from '@/theme/applyTheme'
 
 const weekdayOrder: Array<{ day: string; weekday: number }> = [
   { day: 'Mon', weekday: 1 },
@@ -56,7 +58,7 @@ const defaultForm: UpdatePreferencesDto = {
     accentColor: '#e11d77',
     dashboardBackground:
       'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)',
-    themePreset: 'pink',
+    themePreset: 'soft-rose',
     widgetStyle: 'soft',
     layoutDensity: 'comfortable',
   },
@@ -65,6 +67,7 @@ const defaultForm: UpdatePreferencesDto = {
 function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePreferencesDto {
   const settings = meData.settings
   const targetsByWeekday = new Map(meData.targets.map((target) => [target.weekday, target.targetMinutes]))
+  const uiPreferences = meData.uiPreferences ?? defaultForm.uiPreferences
 
   return {
     settings: {
@@ -79,7 +82,10 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
       weekday,
       targetMinutes: targetsByWeekday.get(weekday) ?? 90,
     })),
-    uiPreferences: meData.uiPreferences ?? defaultForm.uiPreferences,
+    uiPreferences: {
+      ...uiPreferences,
+      themePreset: normalizeTheme(uiPreferences.themePreset),
+    },
   }
 }
 
@@ -107,7 +113,7 @@ export function SettingsPage() {
     dashboardBackground:
       form.uiPreferences?.dashboardBackground ??
       'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)',
-    themePreset: form.uiPreferences?.themePreset ?? 'pink',
+    themePreset: form.uiPreferences?.themePreset ?? 'soft-rose',
     widgetStyle: form.uiPreferences?.widgetStyle ?? 'soft',
     layoutDensity: form.uiPreferences?.layoutDensity ?? 'comfortable',
   })
@@ -192,6 +198,12 @@ export function SettingsPage() {
     : sync.pendingCount > 0
       ? `${sync.pendingCount} queued`
       : 'Up to date'
+
+  const accentPreview = useMemo(() => {
+    const normalized = normalizeHexColor(form.uiPreferences?.accentColor)
+    if (!normalized) return null
+    return generateAccentShades(normalized)
+  }, [form.uiPreferences?.accentColor])
 
   const applyPreset = () => {
     setForm((current) => ({
@@ -561,7 +573,14 @@ export function SettingsPage() {
                   onClick={() => setTheme(option.value as ThemeName)}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold">{option.label}</p>
+                    <p className="inline-flex items-center gap-2 text-sm font-semibold">
+                      <span className="flex items-center gap-1">
+                        {option.preview.map((color) => (
+                          <span key={color} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                        ))}
+                      </span>
+                      {option.label}
+                    </p>
                     {theme === option.value ? <Check className="h-4 w-4 text-primary" /> : null}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{option.description}</p>
@@ -620,12 +639,27 @@ export function SettingsPage() {
                     }))
                   }
                 />
+                {accentPreview ? (
+                  <div className="mt-2 space-y-1.5 rounded-md border border-border/70 bg-background/70 p-2">
+                    <p className="text-[11px] font-medium text-muted-foreground">Generated shades preview</p>
+                    <div className="flex items-center gap-1.5">
+                      {Object.entries(accentPreview.preview).map(([key, color]) => (
+                        <span
+                          key={key}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70"
+                          style={{ backgroundColor: color }}
+                          title={`${key}: ${color}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Theme preset</span>
                 <select
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={form.uiPreferences?.themePreset ?? 'pink'}
+                  value={form.uiPreferences?.themePreset ?? 'soft-rose'}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,

@@ -5,134 +5,251 @@
 @tailwind utilities;
 
 :root {
-  --background: 347 65% 98%;
-  --foreground: 339 22% 20%;
+  --background: 345 42% 98%;
+  --foreground: 330 18% 18%;
   --card: 0 0% 100%;
-  --card-foreground: 339 22% 20%;
+  --card-foreground: 330 18% 18%;
   --popover: 0 0% 100%;
-  --popover-foreground: 339 22% 20%;
-  --primary: 336 80% 58%;
+  --popover-foreground: 330 18% 18%;
+  --primary: 338 72% 58%;
   --primary-foreground: 350 100% 99%;
-  --secondary: 345 60% 95%;
-  --secondary-foreground: 338 24% 24%;
-  --muted: 343 42% 94%;
-  --muted-foreground: 338 14% 43%;
-  --accent: 345 70% 92%;
-  --accent-foreground: 338 24% 24%;
+  --secondary: 340 48% 94%;
+  --secondary-foreground: 330 20% 24%;
+  --muted: 336 32% 93%;
+  --muted-foreground: 334 12% 44%;
+  --accent: 340 58% 91%;
+  --accent-foreground: 330 20% 24%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 350 100% 99%;
-  --border: 343 30% 88%;
-  --input: 343 30% 88%;
-  --ring: 336 80% 58%;
+  --border: 336 24% 87%;
+  --input: 336 24% 87%;
+  --ring: 338 72% 58%;
+  --card-hover: 0 0% 100%;
+  --chart-1: 338 72% 58%;
+  --chart-2: 356 84% 72%;
+  --chart-3: 266 62% 58%;
+  --chart-4: 191 76% 46%;
+  --chart-5: 39 94% 56%;
+  --chart-grid: 336 34% 86%;
+  --chart-glow: 338 72% 58%;
   --radius: 0.9rem;
   --motion-fast: 0.16s;
-  --motion-medium: 0.24s;
+  --motion-medium: 0.2s;
   --motion-slow: 0.34s;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --bg-accent:
-    radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%),
-    radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
+    radial-gradient(circle at 0% 0%, rgba(252, 221, 234, 0.8), transparent 38%),
+    radial-gradient(circle at 95% 12%, rgba(247, 233, 244, 0.72), transparent 34%);
+  --theme-shadow: 0 14px 32px rgba(140, 64, 99, 0.14);
 }
 
+[data-theme='soft-rose'],
 [data-theme='pink'] {
   --background: 347 65% 98%;
-  --foreground: 339 22% 20%;
+  --foreground: 335 22% 20%;
   --card: 0 0% 100%;
-  --card-foreground: 339 22% 20%;
+  --card-foreground: 335 22% 20%;
   --popover: 0 0% 100%;
-  --popover-foreground: 339 22% 20%;
-  --primary: 336 80% 58%;
+  --popover-foreground: 335 22% 20%;
+  --primary: 336 76% 58%;
   --primary-foreground: 350 100% 99%;
-  --secondary: 345 60% 95%;
-  --secondary-foreground: 338 24% 24%;
+  --secondary: 345 52% 95%;
+  --secondary-foreground: 335 24% 24%;
   --muted: 343 42% 94%;
-  --muted-foreground: 338 14% 43%;
+  --muted-foreground: 334 14% 43%;
   --accent: 345 70% 92%;
-  --accent-foreground: 338 24% 24%;
+  --accent-foreground: 335 24% 24%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 350 100% 99%;
-  --border: 343 30% 88%;
-  --input: 343 30% 88%;
-  --ring: 336 80% 58%;
+  --border: 343 28% 88%;
+  --input: 343 28% 88%;
+  --ring: 336 76% 58%;
+  --card-hover: 338 70% 99%;
+  --chart-1: 336 76% 58%;
+  --chart-2: 350 88% 71%;
+  --chart-3: 265 68% 61%;
+  --chart-4: 196 75% 47%;
+  --chart-5: 37 92% 56%;
+  --chart-grid: 341 33% 86%;
+  --chart-glow: 336 76% 58%;
   --bg-accent:
-    radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%),
-    radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
+    radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.72), transparent 38%),
+    radial-gradient(circle at 96% 10%, rgba(250, 231, 243, 0.7), transparent 34%);
+  --theme-shadow: 0 14px 32px rgba(140, 64, 99, 0.14);
 }
 
+[data-theme='midnight'],
+[data-theme='dark'] {
+  --background: 232 24% 9%;
+  --foreground: 220 18% 92%;
+  --card: 232 21% 13%;
+  --card-foreground: 220 18% 92%;
+  --popover: 232 21% 13%;
+  --popover-foreground: 220 18% 92%;
+  --primary: 326 82% 66%;
+  --primary-foreground: 232 22% 10%;
+  --secondary: 230 14% 21%;
+  --secondary-foreground: 220 18% 92%;
+  --muted: 230 14% 19%;
+  --muted-foreground: 228 14% 72%;
+  --accent: 258 32% 28%;
+  --accent-foreground: 220 18% 92%;
+  --destructive: 0 72% 58%;
+  --destructive-foreground: 0 0% 97%;
+  --border: 230 16% 26%;
+  --input: 230 16% 26%;
+  --ring: 326 82% 66%;
+  --card-hover: 231 22% 15%;
+  --chart-1: 326 82% 66%;
+  --chart-2: 268 84% 69%;
+  --chart-3: 191 84% 60%;
+  --chart-4: 40 92% 58%;
+  --chart-5: 156 64% 46%;
+  --chart-grid: 229 18% 28%;
+  --chart-glow: 326 82% 66%;
+  --bg-accent:
+    radial-gradient(circle at 8% 0%, rgba(118, 45, 88, 0.5), transparent 35%),
+    radial-gradient(circle at 96% 8%, rgba(56, 53, 96, 0.45), transparent 34%);
+  --theme-shadow: 0 18px 34px rgba(4, 8, 20, 0.42);
+}
+
+[data-theme='ocean-calm'] {
+  --background: 209 48% 10%;
+  --foreground: 198 36% 92%;
+  --card: 208 42% 14%;
+  --card-foreground: 198 36% 92%;
+  --popover: 208 42% 14%;
+  --popover-foreground: 198 36% 92%;
+  --primary: 189 92% 54%;
+  --primary-foreground: 208 44% 11%;
+  --secondary: 209 30% 23%;
+  --secondary-foreground: 198 36% 92%;
+  --muted: 209 26% 20%;
+  --muted-foreground: 201 18% 70%;
+  --accent: 198 48% 25%;
+  --accent-foreground: 198 36% 92%;
+  --destructive: 2 76% 60%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 205 26% 29%;
+  --input: 205 26% 29%;
+  --ring: 189 92% 54%;
+  --card-hover: 208 44% 16%;
+  --chart-1: 189 92% 54%;
+  --chart-2: 204 86% 64%;
+  --chart-3: 176 65% 48%;
+  --chart-4: 257 78% 71%;
+  --chart-5: 37 92% 58%;
+  --chart-grid: 206 24% 30%;
+  --chart-glow: 189 92% 54%;
+  --bg-accent:
+    radial-gradient(circle at 4% 0%, rgba(59, 130, 246, 0.36), transparent 38%),
+    radial-gradient(circle at 98% 10%, rgba(34, 211, 238, 0.3), transparent 35%);
+  --theme-shadow: 0 16px 34px rgba(6, 34, 52, 0.36);
+}
+
+[data-theme='forest-focus'] {
+  --background: 146 20% 11%;
+  --foreground: 120 15% 92%;
+  --card: 148 19% 15%;
+  --card-foreground: 120 15% 92%;
+  --popover: 148 19% 15%;
+  --popover-foreground: 120 15% 92%;
+  --primary: 151 52% 52%;
+  --primary-foreground: 146 24% 10%;
+  --secondary: 147 14% 24%;
+  --secondary-foreground: 120 15% 92%;
+  --muted: 147 13% 21%;
+  --muted-foreground: 130 10% 72%;
+  --accent: 156 20% 28%;
+  --accent-foreground: 120 15% 92%;
+  --destructive: 0 70% 57%;
+  --destructive-foreground: 0 0% 96%;
+  --border: 148 15% 29%;
+  --input: 148 15% 29%;
+  --ring: 151 52% 52%;
+  --card-hover: 149 20% 17%;
+  --chart-1: 151 52% 52%;
+  --chart-2: 172 55% 46%;
+  --chart-3: 91 47% 55%;
+  --chart-4: 38 88% 58%;
+  --chart-5: 208 64% 62%;
+  --chart-grid: 146 14% 31%;
+  --chart-glow: 151 52% 52%;
+  --bg-accent:
+    radial-gradient(circle at 6% 0%, rgba(58, 114, 80, 0.36), transparent 36%),
+    radial-gradient(circle at 96% 6%, rgba(61, 89, 67, 0.3), transparent 34%);
+  --theme-shadow: 0 16px 34px rgba(6, 22, 14, 0.34);
+}
+
+[data-theme='minimal-light'],
+[data-theme='minimal'],
+[data-theme='neutral'] {
+  --background: 220 24% 97%;
+  --foreground: 224 18% 17%;
+  --card: 0 0% 100%;
+  --card-foreground: 224 18% 17%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 224 18% 17%;
+  --primary: 221 34% 34%;
+  --primary-foreground: 220 20% 98%;
+  --secondary: 220 22% 93%;
+  --secondary-foreground: 224 18% 20%;
+  --muted: 218 19% 91%;
+  --muted-foreground: 220 10% 44%;
+  --accent: 220 18% 90%;
+  --accent-foreground: 224 18% 20%;
+  --destructive: 0 74% 52%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 216 16% 84%;
+  --input: 216 16% 84%;
+  --ring: 221 34% 34%;
+  --card-hover: 218 30% 99%;
+  --chart-1: 221 34% 40%;
+  --chart-2: 199 72% 43%;
+  --chart-3: 276 48% 56%;
+  --chart-4: 30 84% 56%;
+  --chart-5: 155 50% 40%;
+  --chart-grid: 214 18% 86%;
+  --chart-glow: 221 34% 40%;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(235, 238, 244, 0.66), transparent 38%),
+    radial-gradient(circle at 100% 0%, rgba(244, 246, 250, 0.65), transparent 35%);
+  --theme-shadow: 0 12px 24px rgba(96, 108, 127, 0.12);
+}
+
+[data-theme='violet-studio'],
 [data-theme='purple'] {
   --background: 266 58% 97%;
-  --foreground: 265 24% 21%;
+  --foreground: 264 24% 21%;
   --card: 0 0% 100%;
-  --card-foreground: 265 24% 21%;
+  --card-foreground: 264 24% 21%;
   --popover: 0 0% 100%;
-  --popover-foreground: 265 24% 21%;
-  --primary: 270 76% 58%;
+  --popover-foreground: 264 24% 21%;
+  --primary: 268 78% 59%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 272 55% 93%;
-  --secondary-foreground: 265 24% 21%;
+  --secondary: 270 55% 93%;
+  --secondary-foreground: 264 24% 21%;
   --muted: 268 42% 92%;
-  --muted-foreground: 263 16% 42%;
-  --accent: 272 60% 90%;
-  --accent-foreground: 265 24% 21%;
+  --muted-foreground: 262 16% 42%;
+  --accent: 271 60% 90%;
+  --accent-foreground: 264 24% 21%;
   --destructive: 0 80% 56%;
   --destructive-foreground: 0 0% 98%;
-  --border: 269 28% 84%;
-  --input: 269 28% 84%;
-  --ring: 270 76% 58%;
+  --border: 268 28% 84%;
+  --input: 268 28% 84%;
+  --ring: 268 78% 59%;
+  --card-hover: 268 72% 99%;
+  --chart-1: 268 78% 59%;
+  --chart-2: 320 74% 60%;
+  --chart-3: 201 76% 49%;
+  --chart-4: 29 88% 57%;
+  --chart-5: 155 58% 43%;
+  --chart-grid: 266 28% 86%;
+  --chart-glow: 268 78% 59%;
   --bg-accent:
     radial-gradient(circle at 0% 0%, rgba(225, 211, 253, 0.66), transparent 40%),
     radial-gradient(circle at 98% 8%, rgba(235, 218, 255, 0.62), transparent 36%);
-}
-
-[data-theme='minimal'],
-[data-theme='neutral'] {
-  --background: 42 20% 97%;
-  --foreground: 30 10% 20%;
-  --card: 0 0% 100%;
-  --card-foreground: 30 10% 20%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 30 10% 20%;
-  --primary: 28 35% 42%;
-  --primary-foreground: 42 40% 98%;
-  --secondary: 40 24% 91%;
-  --secondary-foreground: 30 10% 20%;
-  --muted: 42 20% 92%;
-  --muted-foreground: 28 8% 40%;
-  --accent: 42 25% 88%;
-  --accent-foreground: 28 12% 24%;
-  --destructive: 0 76% 52%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 35 18% 84%;
-  --input: 35 18% 84%;
-  --ring: 28 35% 42%;
-  --bg-accent:
-    radial-gradient(circle at 0% 0%, rgba(243, 236, 224, 0.6), transparent 40%),
-    radial-gradient(circle at 90% 12%, rgba(232, 228, 220, 0.5), transparent 36%);
-}
-
-[data-theme='dark'] {
-  --background: 228 18% 11%;
-  --foreground: 220 20% 92%;
-  --card: 228 18% 14%;
-  --card-foreground: 220 20% 92%;
-  --popover: 228 18% 14%;
-  --popover-foreground: 220 20% 92%;
-  --primary: 341 82% 64%;
-  --primary-foreground: 230 24% 9%;
-  --secondary: 230 14% 22%;
-  --secondary-foreground: 220 20% 92%;
-  --muted: 228 14% 20%;
-  --muted-foreground: 226 13% 70%;
-  --accent: 232 16% 23%;
-  --accent-foreground: 220 20% 92%;
-  --destructive: 0 72% 55%;
-  --destructive-foreground: 0 0% 96%;
-  --border: 230 14% 26%;
-  --input: 230 14% 26%;
-  --ring: 341 82% 64%;
-  --bg-accent:
-    radial-gradient(circle at 0% 0%, rgba(72, 34, 52, 0.45), transparent 42%),
-    radial-gradient(circle at 100% 0%, rgba(38, 43, 64, 0.42), transparent 38%);
+  --theme-shadow: 0 14px 28px rgba(93, 72, 148, 0.16);
 }
 
 * {
@@ -149,7 +266,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   transition:
     background-color var(--motion-medium) var(--motion-ease),
-    color var(--motion-medium) var(--motion-ease);
+    color var(--motion-medium) var(--motion-ease),
+    border-color var(--motion-medium) var(--motion-ease);
 }
 
 #root {
@@ -157,7 +275,8 @@ body {
 }
 
 .app-surface {
-  background-image: var(--bg-accent);
+  background-image: var(--user-bg-accent, var(--bg-accent));
+  transition: background-image var(--motion-medium) var(--motion-ease);
 }
 
 [data-density='compact'] {
@@ -180,7 +299,20 @@ body {
   transition:
     box-shadow var(--motion-medium) var(--motion-ease),
     border-color var(--motion-medium) var(--motion-ease),
+    background-color var(--motion-medium) var(--motion-ease),
     transform var(--motion-medium) var(--motion-ease);
+}
+
+.dashboard-widget:hover {
+  background-color: hsl(var(--card-hover));
+  box-shadow: var(--theme-shadow);
+}
+
+:where(.bg-background, .bg-card, .bg-secondary, .bg-muted, .bg-accent, .border-border, .text-foreground, .text-muted-foreground) {
+  transition:
+    background-color var(--motion-medium) var(--motion-ease),
+    border-color var(--motion-medium) var(--motion-ease),
+    color var(--motion-medium) var(--motion-ease);
 }
 
 [data-widget-style='glass'] .dashboard-widget {
