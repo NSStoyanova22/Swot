@@ -101,9 +101,9 @@ export function SettingsPage() {
   const [copied, setCopied] = useState(false)
   const [downloadingReport, setDownloadingReport] = useState(false)
   useUiPersonalization({
-    workspaceName: form.uiPreferences?.workspaceName ?? 'Study Hub',
+    workspaceName: form.uiPreferences?.workspaceName ?? 'Swot',
     avatar: form.uiPreferences?.avatar ?? '✨',
-    accentColor: form.uiPreferences?.accentColor ?? '#e11d77',
+    accentColor: form.uiPreferences?.accentColor ?? '#1f1b1d',
     dashboardBackground:
       form.uiPreferences?.dashboardBackground ??
       'radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%), radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%)',
@@ -126,14 +126,6 @@ export function SettingsPage() {
       setIsInitialized(true)
     }
   }, [isInitialized, meQuery.data])
-
-  useEffect(() => {
-    const preset = form.uiPreferences?.themePreset
-    if (!preset) return
-    if (theme !== preset) {
-      setTheme(preset as ThemeName)
-    }
-  }, [form.uiPreferences?.themePreset, setTheme, theme])
 
   const mutation = useMutation({
     mutationFn: updatePreferences,

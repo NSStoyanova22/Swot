@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+
+import { applyTheme, getStoredTheme, normalizeTheme, storeTheme, type AppTheme } from '@/theme/applyTheme'
 
 export const themeOptions = [
   { value: 'pink', label: 'Pink', description: 'Rose accents and warm cards.' },
@@ -9,44 +11,36 @@ export const themeOptions = [
 
 export type ThemeName = (typeof themeOptions)[number]['value']
 
-const THEME_STORAGE_KEY = 'swot-theme'
-
-function normalizeTheme(value: string | null): ThemeName {
-  if (value === 'pink' || value === 'purple' || value === 'dark' || value === 'minimal') return value
-  if (value === 'neutral') return 'minimal'
-  return 'pink'
+type ThemeContextValue = {
+  theme: ThemeName
+  setTheme: (theme: ThemeName) => void
+  options: typeof themeOptions
 }
 
-export function getStoredTheme() {
-  if (typeof window === 'undefined') return 'pink'
-  return normalizeTheme(window.localStorage.getItem(THEME_STORAGE_KEY))
-}
+const ThemeContext = createContext<ThemeContextValue | null>(null)
 
-export function useTheme() {
-  const [theme, setTheme] = useState<ThemeName>(() => getStoredTheme())
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setThemeState] = useState<ThemeName>(() => getStoredTheme())
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-    window.dispatchEvent(new CustomEvent('swot:theme-change', { detail: { theme } }))
+    applyTheme(theme as AppTheme)
+    storeTheme(theme as AppTheme)
   }, [theme])
 
-  useEffect(() => {
-    const onThemeChange = (event: Event) => {
-      const custom = event as CustomEvent<{ theme?: ThemeName }>
-      if (!custom.detail?.theme) return
-      setTheme(normalizeTheme(custom.detail.theme))
-    }
-    window.addEventListener('swot:theme-change', onThemeChange)
-    return () => window.removeEventListener('swot:theme-change', onThemeChange)
-  }, [])
-
-  return useMemo(
+  const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
-      setTheme,
+      setTheme: (nextTheme) => setThemeState(normalizeTheme(nextTheme)),
       options: themeOptions,
     }),
     [theme],
   )
+
+  return createElement(ThemeContext.Provider, { value }, children)
+}
+
+export function useTheme() {
+  const context = useContext(ThemeContext)
+  if (!context) throw new Error('useTheme must be used within ThemeProvider')
+  return context
 }

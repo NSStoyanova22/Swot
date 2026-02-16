@@ -4,6 +4,10 @@ import { recomputeAndStoreAchievements } from "./achievements.js";
 import { prisma } from "./db.js";
 import { addDistraction, getSessionDistractions, isDistractionType } from "./distractions.js";
 import {
+  getFocusGardenOverview,
+  upsertFocusGardenGrowthFromSession,
+} from "./focus-garden.js";
+import {
   computeNextReminderTrigger,
   type ReminderRepeatRule,
 } from "./organization.js";
@@ -1376,6 +1380,13 @@ export async function routes(app: FastifyInstance) {
     return unifiedItems;
   });
 
+  app.get("/focus-garden/overview", async (req) => {
+    const query = req.query as { days?: string; timelineLimit?: string };
+    const days = query.days ? Number(query.days) : 90;
+    const timelineLimit = query.timelineLimit ? Number(query.timelineLimit) : 120;
+    return getFocusGardenOverview(USER_ID, days, timelineLimit);
+  });
+
   // Sessions
   app.get("/sessions", async (req) => {
     const q = req.query as {
@@ -1438,6 +1449,11 @@ export async function routes(app: FastifyInstance) {
       include: { course: true, activity: true },
     });
 
+    await upsertFocusGardenGrowthFromSession(USER_ID, {
+      id: created.id,
+      startTime: created.startTime,
+      durationMinutes: created.durationMinutes,
+    });
     await recomputeAndStoreAchievements(USER_ID);
     await recomputeAndStoreStreak(USER_ID);
     await recomputeAndStoreProductivity(USER_ID);
@@ -1482,6 +1498,11 @@ export async function routes(app: FastifyInstance) {
       include: { course: true, activity: true },
     });
 
+    await upsertFocusGardenGrowthFromSession(USER_ID, {
+      id: updated.id,
+      startTime: updated.startTime,
+      durationMinutes: updated.durationMinutes,
+    });
     await recomputeAndStoreAchievements(USER_ID);
     await recomputeAndStoreStreak(USER_ID);
     await recomputeAndStoreProductivity(USER_ID);

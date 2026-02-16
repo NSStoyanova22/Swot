@@ -5,6 +5,7 @@ import { BookOpen, Circle, Palette, Pencil, Plus, Trash2 } from 'lucide-react'
 import { createActivity, deleteActivity, getActivities, updateActivity } from '@/api/activities'
 import { ApiError } from '@/api/client'
 import { createCourse, deleteCourse, getCourses, updateCourse } from '@/api/courses'
+import { PageContainer, PageHeader } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -172,8 +173,15 @@ export function CoursesPage() {
   const isLoading = coursesQuery.isPending || activitiesQuery.isPending
 
   return (
-    <section className="grid gap-4 xl:grid-cols-[380px_1fr]">
-      <Card className="shadow-soft">
+    <PageContainer>
+      <PageHeader
+        title="📚 Courses"
+        subtitle="Create, rename, and manage your course catalog and activities."
+        actions={selectedCourse ? <Badge variant="outline">{selectedActivities.length} activities in {selectedCourse.name}</Badge> : null}
+      />
+
+      <section className="grid items-start gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Card className="min-w-0 h-full shadow-soft">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-primary" />
@@ -318,8 +326,8 @@ export function CoursesPage() {
         </CardContent>
       </Card>
 
-      <Card className="shadow-soft">
-        <CardHeader>
+        <Card className="min-w-0 h-full shadow-soft">
+          <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Palette className="h-4 w-4 text-primary" />
             Activities {selectedCourse ? `for ${selectedCourse.name}` : ''}
@@ -464,8 +472,9 @@ export function CoursesPage() {
               Select or create a course to manage activities.
             </div>
           )}
-        </CardContent>
-      </Card>
-    </section>
+          </CardContent>
+        </Card>
+      </section>
+    </PageContainer>
   )
 }

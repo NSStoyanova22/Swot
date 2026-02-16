@@ -39,6 +39,7 @@ import { getProductivityOverview } from '@/api/productivity'
 import { getSessions } from '@/api/sessions'
 import { getStreakOverview } from '@/api/streak'
 import type { SessionDto } from '@/api/dtos'
+import { PageContainer, PageHeader, SectionGrid } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -219,7 +220,7 @@ function Tile({
   extra?: ReactNode
 }) {
   return (
-    <Card className="dashboard-widget h-full shadow-soft">
+    <Card className="dashboard-widget flex h-full min-h-[178px] flex-col shadow-soft">
       <CardHeader className="pb-3">
         <CardDescription className="flex items-center justify-between">
           {title}
@@ -227,7 +228,7 @@ function Tile({
         </CardDescription>
         <CardTitle className="text-2xl">{value}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="flex-1 space-y-2">
         <p className="text-sm text-muted-foreground">{description}</p>
         {extra}
       </CardContent>
@@ -842,33 +843,32 @@ export function DashboardPage() {
   }
 
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-6 px-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/80 p-4 shadow-soft">
-        <div>
-          <p className="text-xl font-semibold text-foreground">
-            {now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+    <PageContainer>
+      <PageHeader
+        title={now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+        subtitle={
+          <span className="mt-1 inline-flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="gap-1">
               <CalendarDays className="h-3.5 w-3.5" />
               Calendar week {isoWeekNumber(now)}
             </Badge>
             <Badge>{schoolLabel}</Badge>
-          </div>
-        </div>
-
-        <select
-          className="h-10 min-w-64 rounded-md border border-input bg-background px-3 text-sm"
-          value={schoolLabel}
-          onChange={(event) => setSchoolLabel(event.target.value)}
-        >
-          {schoolLabels.map((label) => (
-            <option key={label} value={label}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </div>
+          </span>
+        }
+        actions={(
+          <select
+            className="h-10 min-w-64 rounded-md border border-input bg-background px-3 text-sm"
+            value={schoolLabel}
+            onChange={(event) => setSchoolLabel(event.target.value)}
+          >
+            {schoolLabels.map((label) => (
+              <option key={label} value={label}>
+                {label}
+              </option>
+            ))}
+          </select>
+        )}
+      />
 
       <Card className="shadow-soft">
         <CardHeader>
@@ -917,7 +917,7 @@ export function DashboardPage() {
         ) : null}
       </Card>
 
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 [grid-auto-flow:dense]">
+      <SectionGrid className="[grid-auto-flow:dense] gap-6">
         {visibleWidgets.map((widget) => (
           <motion.div
             layout
@@ -962,7 +962,7 @@ export function DashboardPage() {
             <div className="h-full">{widgetContent[widget]}</div>
           </motion.div>
         ))}
-      </section>
-    </section>
+      </SectionGrid>
+    </PageContainer>
   )
 }

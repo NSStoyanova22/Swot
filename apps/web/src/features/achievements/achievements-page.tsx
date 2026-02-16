@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import { getAchievements } from '@/api/achievements'
+import { PageContainer, PageHeader, SectionGrid } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -47,39 +48,51 @@ export function AchievementsPage() {
 
   if (achievementsQuery.isPending) {
     return (
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 8 }).map((_, index) => (
-          <Card key={index} className="shadow-soft">
-            <CardHeader className="space-y-2">
-              <Skeleton className="h-5 w-32" />
-              <Skeleton className="h-4 w-full" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-4 w-24" />
-            </CardContent>
-          </Card>
-        ))}
-      </section>
+      <PageContainer>
+        <SectionGrid>
+          {Array.from({ length: 8 }).map((_, index) => (
+            <Card key={index} className="shadow-soft">
+              <CardHeader className="space-y-2">
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="h-4 w-full" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-4 w-24" />
+              </CardContent>
+            </Card>
+          ))}
+        </SectionGrid>
+      </PageContainer>
     )
   }
 
   if (achievementsQuery.isError || !data) {
     return (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-        Could not load achievements right now.
-      </div>
+      <PageContainer>
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          Could not load achievements right now.
+        </div>
+      </PageContainer>
     )
   }
 
   return (
-    <section className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-4">
-        <Card className="shadow-soft lg:col-span-2">
+    <PageContainer>
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Award className="h-4 w-4 text-primary" />
+            🏅 Achievements
+          </span>
+        }
+        subtitle="Progress-based badges, unlocked once unless they are level-based."
+        actions={<Badge>{earnedCount}/{data.achievements.length} earned</Badge>}
+      />
+
+      <SectionGrid>
+        <Card className="shadow-soft xl:col-span-2">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Award className="h-4 w-4 text-primary" />
-              🏅 Achievements
-            </CardTitle>
+            <CardTitle className="text-base">Overview</CardTitle>
             <CardDescription>Progress-based badges, unlocked once unless they are level-based.</CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-between gap-3">
@@ -114,22 +127,14 @@ export function AchievementsPage() {
             <p>Bronze: {data.medalThresholds.bronze}m+</p>
           </CardContent>
         </Card>
-      </div>
+      </SectionGrid>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <SectionGrid>
         {data.achievements.map((achievement) => {
           const Icon = iconMap[achievement.icon as keyof typeof iconMap] ?? Sparkles
 
           return (
-            <Card
-              key={achievement.code}
-              className={cn(
-                'transition-colors',
-                achievement.earned
-                  ? 'border-primary/40 bg-primary/5 shadow-soft'
-                  : 'border-border/70 bg-background/70 opacity-75',
-              )}
-            >
+            <Card key={achievement.code} className={cn('transition-colors', achievement.earned ? 'border-primary/40 bg-primary/5 shadow-soft' : 'border-border/70 bg-background/70 opacity-75')}>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center justify-between gap-2 text-base">
                   <span className="inline-flex items-center gap-2">
@@ -155,7 +160,7 @@ export function AchievementsPage() {
             </Card>
           )
         })}
-      </div>
-    </section>
+      </SectionGrid>
+    </PageContainer>
   )
 }

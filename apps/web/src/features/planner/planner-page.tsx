@@ -24,6 +24,7 @@ import {
   getPlannerOverview,
   updatePlannerBlock,
 } from '@/api/planner'
+import { PageContainer, PageHeader } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -611,12 +612,12 @@ export function PlannerPage() {
 
   if (blocksQuery.isPending || overviewQuery.isPending) {
     return (
-      <section className="space-y-4">
+      <PageContainer>
         <Card className="shadow-soft">
           <CardHeader>
             <Skeleton className="h-6 w-64" />
           </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-4">
+          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {Array.from({ length: 4 }).map((_, index) => (
               <Skeleton key={index} className="h-20 w-full" />
             ))}
@@ -632,7 +633,7 @@ export function PlannerPage() {
             ))}
           </CardContent>
         </Card>
-      </section>
+      </PageContainer>
     )
   }
 
@@ -644,119 +645,125 @@ export function PlannerPage() {
   }
 
   return (
-    <section className="space-y-4">
-      <Card className="shadow-soft">
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <CalendarPlus2 className="h-4 w-4 text-primary" />
-                🗓️ Study Planner
-              </CardTitle>
-              <CardDescription>Plan future study blocks, drag to adjust your week, and compare planned vs actual.</CardDescription>
-            </div>
+    <PageContainer>
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <CalendarPlus2 className="h-4 w-4 text-primary" />
+            🗓️ Study Planner
+          </span>
+        }
+        subtitle="Plan future study blocks, drag to adjust your week, and compare planned vs actual."
+        actions={(
+          <>
+            <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, -7))}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Badge className="min-w-[170px] flex-1 justify-center sm:flex-none">{weekLabel}</Badge>
+            <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, 7))}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button onClick={() => setEditorState({ mode: 'create', selectedDate: weekDays[0] })}>
+              <Plus className="h-4 w-4" />
+              Add block
+            </Button>
+          </>
+        )}
+      />
 
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, -7))}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Badge className="min-w-44 justify-center">{weekLabel}</Badge>
-              <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, 7))}>
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <Button onClick={() => setEditorState({ mode: 'create', selectedDate: weekDays[0] })}>
-                <Plus className="h-4 w-4" />
-                Add block
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Planned</p>
-            <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.plannedMinutes)}</p>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Actual</p>
-            <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.actualMinutes)}</p>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Variance</p>
-            <p className={cn('mt-1 text-xl font-semibold', overview.varianceMinutes < 0 ? 'text-destructive' : 'text-emerald-600')}>
-              {overview.varianceMinutes > 0 ? '+' : ''}
-              {formatMinutes(overview.varianceMinutes)}
-            </p>
-          </div>
-          <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Missed blocks</p>
-            <p className="mt-1 text-xl font-semibold">{overview.missedSessions}</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <section className="grid gap-4 xl:grid-cols-12">
-        <Card className="shadow-soft xl:col-span-4">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Bell className="h-4 w-4 text-primary" />
-              Deadline Alerts
-            </CardTitle>
-            <CardDescription>Upcoming tasks, exams, and reminders in the next 7 days.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {upcomingAlerts.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                No upcoming alerts. Add task deadlines or reminders.
-              </p>
-            ) : (
-              upcomingAlerts.map((alert, index) => (
-                <div key={`${alert.type}-${alert.title}-${index}`} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                  <p className="text-sm font-medium">{alert.title}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {alert.type} • {new Date(alert.at).toLocaleString()}
-                  </p>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-soft xl:col-span-8">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Clock3 className="h-4 w-4 text-primary" />
-              Unified Schedule Timeline
-            </CardTitle>
-            <CardDescription>Planner blocks, sessions, reminders, tasks, and rotating timetable in one view.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {unifiedQuery.isPending ? (
-              <Skeleton className="h-24 w-full" />
-            ) : unifiedItems.length === 0 ? (
-              <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                Timeline is empty for this range.
-              </p>
-            ) : (
-              unifiedItems.slice(0, 16).map((item) => (
-                <div key={item.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold">{item.title}</p>
-                    <Badge variant="outline">{item.type}</Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {new Date(item.startTime).toLocaleString()}
-                    {item.endTime ? ` - ${new Date(item.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{item.meta}</p>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Planned</p>
+          <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.plannedMinutes)}</p>
+        </div>
+        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Actual</p>
+          <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.actualMinutes)}</p>
+        </div>
+        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Variance</p>
+          <p className={cn('mt-1 text-xl font-semibold', overview.varianceMinutes < 0 ? 'text-destructive' : 'text-emerald-600')}>
+            {overview.varianceMinutes > 0 ? '+' : ''}
+            {formatMinutes(overview.varianceMinutes)}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Missed blocks</p>
+          <p className="mt-1 text-xl font-semibold">{overview.missedSessions}</p>
+        </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-12">
-        <Card className="shadow-soft xl:col-span-5">
+      <section className="flex flex-col gap-6 lg:flex-row">
+        <div className="w-full lg:max-w-sm lg:w-[360px] shrink-0">
+          <Card className="w-full min-w-0 shadow-soft">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Bell className="h-4 w-4 text-primary" />
+                Deadline Alerts
+              </CardTitle>
+              <CardDescription className="break-words">
+                Upcoming tasks, exams, and reminders in the next 7 days.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="w-full space-y-2">
+              {upcomingAlerts.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                  No upcoming alerts. Add task deadlines or reminders.
+                </p>
+              ) : (
+                upcomingAlerts.map((alert, index) => (
+                  <div key={`${alert.type}-${alert.title}-${index}`} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                    <p className="break-words text-sm font-medium">{alert.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {alert.type} • {new Date(alert.at).toLocaleString()}
+                    </p>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="min-w-0 flex-1 w-full">
+          <Card className="w-full min-w-0 shadow-soft">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Clock3 className="h-4 w-4 text-primary" />
+                Unified Schedule Timeline
+              </CardTitle>
+              <CardDescription className="break-words">
+                Planner blocks, sessions, reminders, tasks, and rotating timetable in one view.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="min-w-0 space-y-2">
+              {unifiedQuery.isPending ? (
+                <Skeleton className="h-24 w-full" />
+              ) : unifiedItems.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                  Timeline is empty for this range.
+                </p>
+              ) : (
+                unifiedItems.slice(0, 16).map((item) => (
+                  <div key={item.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="min-w-0 break-words text-sm font-semibold">{item.title}</p>
+                      <Badge variant="outline">{item.type}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(item.startTime).toLocaleString()}
+                      {item.endTime ? ` - ${new Date(item.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                    </p>
+                    <p className="break-words text-xs text-muted-foreground">{item.meta}</p>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Card className="min-w-0 h-full shadow-soft">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <ListChecks className="h-4 w-4 text-primary" />
@@ -886,7 +893,7 @@ export function PlannerPage() {
           </CardContent>
         </Card>
 
-        <Card className="shadow-soft xl:col-span-7">
+        <Card className="min-w-0 h-full shadow-soft">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Target className="h-4 w-4 text-primary" />
@@ -895,9 +902,9 @@ export function PlannerPage() {
             <CardDescription>Create block schedules and optional rotations for recurring study structure.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-2 sm:grid-cols-5">
+            <div className="grid gap-2 md:grid-cols-5">
               <Input
-                className="sm:col-span-2"
+                className="md:col-span-2"
                 value={scheduleComposer.title}
                 onChange={(event) => setScheduleComposer((current) => ({ ...current, title: event.target.value }))}
                 placeholder="Block title"
@@ -996,19 +1003,19 @@ export function PlannerPage() {
         </Card>
       </section>
 
-      <Card className="shadow-soft">
+      <Card className="min-w-0 shadow-soft">
         <CardHeader>
           <CardTitle>📆 Weekly Schedule</CardTitle>
           <CardDescription>Drag any block to another day. Click a block to edit details.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-7">
+        <CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
           {weekDays.map((day, index) => {
             const key = toDateKey(day)
             const dayBlocks = blocksByDay.get(key) ?? []
             return (
               <div
                 key={key}
-                className="rounded-lg border border-border/70 bg-background/70 p-2"
+                className="min-w-0 rounded-lg border border-border/70 bg-background/70 p-2"
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={() => handleDrop(day)}
               >
@@ -1139,6 +1146,6 @@ export function PlannerPage() {
         }}
         onSaved={() => setEditorState(null)}
       />
-    </section>
+    </PageContainer>
   )
 }

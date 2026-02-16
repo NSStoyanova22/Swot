@@ -252,6 +252,43 @@ export type AnalyticsPredictionDto = {
   generatedAt: string
 }
 
+export type FocusGardenSummaryDto = {
+  totalPlants: number
+  totalGrowthPoints: number
+  consistencyStreak: number
+  gardenLevel: number
+  lastGrowthAt: string | null
+}
+
+export type FocusGardenDailyDto = {
+  date: string
+  growthPoints: number
+  plants: number
+  sessionMinutes: number
+  weekday: number
+  hasGrowth: boolean
+}
+
+export type FocusGardenTimelineItemDto = {
+  id: string
+  sessionId: string
+  growthPoints: number
+  sessionMinutes: number
+  plantType: 'sprout' | 'flower' | 'shrub' | 'tree' | string
+  growthStage: 'seedling' | 'young' | 'blooming' | 'mature' | 'ancient' | string
+  grewAt: string
+  createdAt: string
+  courseName: string
+  activityName: string | null
+  note: string | null
+}
+
+export type FocusGardenOverviewDto = {
+  summary: FocusGardenSummaryDto
+  daily: FocusGardenDailyDto[]
+  timeline: FocusGardenTimelineItemDto[]
+}
+
 export type PlannerBlockStatus = 'upcoming' | 'completed' | 'missed'
 
 export type PlannerBlockDto = {

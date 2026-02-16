@@ -8,6 +8,7 @@ import {
   CalendarClock,
   CalendarDays,
   Clock3,
+  Flower2,
   Gauge,
   LayoutDashboard,
   Menu,
@@ -27,6 +28,7 @@ import { AchievementsPage } from '@/features/achievements/achievements-page'
 import { CalendarPage } from '@/features/calendar/calendar-page'
 import { CoursesPage } from '@/features/courses/courses-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
+import { FocusGardenPage } from '@/features/focus-garden/focus-garden-page'
 import { InsightsPage } from '@/features/insights/insights-page'
 import { PlannerPage } from '@/features/planner/planner-page'
 import { SessionsPage } from '@/features/sessions/sessions-page'
@@ -39,6 +41,7 @@ import { cn } from '@/lib/utils'
 
 const navigation = [
   { name: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { name: 'Focus Garden', label: 'Focus Garden', icon: Flower2 },
   { name: 'Timer', label: 'Timer', icon: Clock3 },
   { name: 'Sessions', label: 'Sessions', icon: Gauge },
   { name: 'Courses', label: 'Courses', icon: BookOpen },
@@ -69,12 +72,6 @@ function App() {
     queryFn: ({ signal }) => getMe(signal),
   })
   useUiPersonalization(meQuery.data?.uiPreferences)
-
-  useEffect(() => {
-    const preferredTheme = meQuery.data?.uiPreferences?.themePreset
-    if (!preferredTheme || preferredTheme === theme) return
-    setTheme(preferredTheme)
-  }, [meQuery.data?.uiPreferences?.themePreset, setTheme, theme])
 
   useEffect(() => {
     if (!mobileSidebarOpen) return
@@ -124,14 +121,15 @@ function App() {
       if (event.altKey) {
         const pageByIndex: Record<string, NavName> = {
           '1': 'Dashboard',
-          '2': 'Timer',
-          '3': 'Sessions',
-          '4': 'Courses',
-          '5': 'Planner',
-          '6': 'Calendar',
-          '7': 'Insights',
-          '8': 'Achievements',
-          '9': 'Settings',
+          '2': 'Focus Garden',
+          '3': 'Timer',
+          '4': 'Sessions',
+          '5': 'Courses',
+          '6': 'Planner',
+          '7': 'Calendar',
+          '8': 'Insights',
+          '9': 'Achievements',
+          '0': 'Settings',
         }
         const targetPage = pageByIndex[event.key]
         if (targetPage) {
@@ -153,11 +151,12 @@ function App() {
       : 'Synced'
 
   const syncBadgeVariant = sync.pendingCount > 0 ? 'secondary' : 'outline'
-  const workspaceName = meQuery.data?.uiPreferences?.workspaceName || 'Study Hub'
+  const workspaceName = meQuery.data?.uiPreferences?.workspaceName || 'Swot'
   const avatar = meQuery.data?.uiPreferences?.avatar || '✨'
 
   const renderActivePage = () => {
     if (activeNav === 'Settings') return <SettingsPage />
+    if (activeNav === 'Focus Garden') return <FocusGardenPage />
     if (activeNav === 'Sessions') return <SessionsPage openCreateSignal={createSessionSignal} />
     if (activeNav === 'Timer') return <TimerPage startFocusSignal={startTimerSignal} />
     if (activeNav === 'Courses') return <CoursesPage />
@@ -322,7 +321,7 @@ function App() {
             <p className="flex items-center justify-between"><span>Command palette</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Cmd/Ctrl + K</kbd></p>
             <p className="flex items-center justify-between"><span>Start timer</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Shift + T</kbd></p>
             <p className="flex items-center justify-between"><span>Log session</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Shift + L</kbd></p>
-            <p className="flex items-center justify-between"><span>Navigate pages</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Alt + 1..9</kbd></p>
+            <p className="flex items-center justify-between"><span>Navigate pages</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Alt + 1..0</kbd></p>
             <p className="flex items-center justify-between"><span>Show this guide</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">?</kbd></p>
           </div>
         </DialogContent>

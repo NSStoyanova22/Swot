@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Bar,
@@ -13,6 +14,7 @@ import {
 import { AlertTriangle, Clock3, Coffee, Lock, Sparkles, Target } from 'lucide-react'
 
 import { getAnalyticsInsights } from '@/api/analytics'
+import { PageContainer, PageHeader, SectionGrid } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -36,7 +38,26 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
   )
 }
 
+function shortenHourRangeLabel(label: string) {
+  const normalized = label.toLowerCase()
+  if (normalized.includes('morning')) return 'Morning'
+  if (normalized.includes('noon') || normalized.includes('midday')) return 'Noon'
+  if (normalized.includes('evening')) return 'Eve'
+  if (normalized.includes('night')) return 'Night'
+  return label
+}
+
 export function InsightsPage() {
+  const [isCompact, setIsCompact] = useState(false)
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)')
+    const onChange = () => setIsCompact(media.matches)
+    onChange()
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+
   const insightsQuery = useQuery({
     queryKey: ['analytics-insights'],
     queryFn: ({ signal }) => getAnalyticsInsights(signal),
@@ -45,27 +66,31 @@ export function InsightsPage() {
 
   if (insightsQuery.isPending) {
     return (
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, index) => (
-          <Card key={index} className="shadow-soft">
-            <CardHeader className="space-y-2">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-8 w-28" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-4 w-36" />
-            </CardContent>
-          </Card>
-        ))}
-      </section>
+      <PageContainer>
+        <SectionGrid className="xl:[&>*]:col-span-1">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <Card key={index} className="shadow-soft">
+              <CardHeader className="space-y-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-8 w-28" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-4 w-36" />
+              </CardContent>
+            </Card>
+          ))}
+        </SectionGrid>
+      </PageContainer>
     )
   }
 
   if (insightsQuery.isError || !insightsQuery.data) {
     return (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-        Could not load insights right now.
-      </div>
+      <PageContainer>
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          Could not load insights right now.
+        </div>
+      </PageContainer>
     )
   }
 
@@ -75,35 +100,43 @@ export function InsightsPage() {
     const remaining = Math.max(0, 5 - insights.sessionCount)
 
     return (
-      <Card className="mx-auto max-w-2xl shadow-soft">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Lock className="h-4 w-4 text-primary" />
-            🔒 Insights Locked
-          </CardTitle>
-          <CardDescription>
-            Log a few more sessions and we will unlock your personalized learning patterns.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p>
-            You have <span className="font-semibold">{insights.sessionCount}</span> session(s). Add{' '}
-            <span className="font-semibold">{remaining}</span> more to unlock Insights.
-          </p>
-          <div className="h-2 rounded-full bg-secondary">
-            <div
-              className="h-2 rounded-full bg-primary transition-all"
-              style={{ width: `${Math.min(100, (insights.sessionCount / 5) * 100)}%` }}
-            />
-          </div>
-        </CardContent>
-      </Card>
+      <PageContainer>
+        <PageHeader
+          title={
+            <span className="inline-flex items-center gap-2">
+              <Lock className="h-4 w-4 text-primary" />
+              🔒 Insights Locked
+            </span>
+          }
+          subtitle="Log a few more sessions and we will unlock your personalized learning patterns."
+        />
+        <Card className="mx-auto w-full max-w-2xl shadow-soft">
+          <CardContent className="space-y-3 pt-6 text-sm">
+            <p>
+              You have <span className="font-semibold">{insights.sessionCount}</span> session(s). Add{' '}
+              <span className="font-semibold">{remaining}</span> more to unlock Insights.
+            </p>
+            <div className="h-2 rounded-full bg-secondary">
+              <div
+                className="h-2 rounded-full bg-primary transition-all"
+                style={{ width: `${Math.min(100, (insights.sessionCount / 5) * 100)}%` }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      </PageContainer>
     )
   }
 
   return (
-    <section className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+    <PageContainer>
+      <PageHeader
+        title="📊 Insights"
+        subtitle="Personalized study patterns, trend signals, and recommendations."
+        actions={<Badge variant="outline">{insights.sessionCount} sessions analyzed</Badge>}
+      />
+
+      <SectionGrid className="xl:[&>*]:col-span-1">
         <Card className="shadow-soft">
           <CardHeader>
             <CardDescription className="flex items-center justify-between">
@@ -174,7 +207,7 @@ export function InsightsPage() {
             <p className="text-sm text-muted-foreground">Score: {insights.burnoutRisk.score}/100</p>
           </CardContent>
         </Card>
-      </div>
+      </SectionGrid>
 
       <Card className="shadow-soft">
         <CardHeader>
@@ -199,13 +232,13 @@ export function InsightsPage() {
         </CardContent>
       </Card>
 
-      <section className="grid gap-4 lg:grid-cols-2">
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="shadow-soft">
           <CardHeader>
             <CardTitle>📈 Minutes by Weekday</CardTitle>
             <CardDescription>Your strongest weekday pattern.</CardDescription>
           </CardHeader>
-          <CardContent className="h-[300px]">
+          <CardContent className="h-[300px] min-w-0">
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
               <BarChart data={insights.charts.weekdayMinutes} barCategoryGap={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
@@ -223,11 +256,25 @@ export function InsightsPage() {
             <CardTitle>⏰ Minutes by Hour Range</CardTitle>
             <CardDescription>When your focus tends to peak.</CardDescription>
           </CardHeader>
-          <CardContent className="h-[300px]">
+          <CardContent className="h-[300px] min-w-0">
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
-              <BarChart data={insights.charts.hourRangeMinutes} barCategoryGap={18}>
+              <BarChart
+                data={insights.charts.hourRangeMinutes}
+                barCategoryGap={18}
+                margin={{ top: 8, right: 8, left: 4, bottom: isCompact ? 40 : 20 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
-                <XAxis dataKey="range" tickLine={false} axisLine={false} interval={0} fontSize={11} />
+                <XAxis
+                  dataKey="range"
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                  tickFormatter={(value: string) => (isCompact ? shortenHourRangeLabel(value) : value)}
+                  angle={isCompact ? -25 : 0}
+                  textAnchor={isCompact ? 'end' : 'middle'}
+                  height={isCompact ? 52 : 30}
+                  fontSize={11}
+                />
                 <YAxis tickLine={false} axisLine={false} width={46} tickFormatter={(value) => `${value}m`} />
                 <Tooltip content={<ChartTooltip />} />
                 <Bar dataKey="minutes" fill="#fb7185" radius={[8, 8, 0, 0]} />
@@ -257,6 +304,6 @@ export function InsightsPage() {
           </ResponsiveContainer>
         </CardContent>
       </Card>
-    </section>
+    </PageContainer>
   )
 }
