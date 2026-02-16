@@ -41,14 +41,26 @@ function buildUrl(path: string, query?: ApiRequestOptions['query']) {
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { method = 'GET', query, body, headers, signal } = options
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
+
+  const resolvedHeaders = new Headers(headers)
+  if (!isFormData) {
+    resolvedHeaders.set('Content-Type', 'application/json')
+  } else {
+    resolvedHeaders.delete('Content-Type')
+  }
+
+  const resolvedBody =
+    body === undefined
+      ? undefined
+      : isFormData
+        ? body
+        : JSON.stringify(body)
 
   const response = await fetch(buildUrl(path, query), {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: resolvedHeaders,
+    body: resolvedBody,
     signal,
   })
 

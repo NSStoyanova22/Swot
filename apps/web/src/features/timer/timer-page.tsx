@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock3, Coffee, Flame, Info, Pause, Play, RotateCcw, Save, Timer } from 'lucide-react'
+import Tesseract from 'tesseract.js'
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
@@ -384,6 +385,10 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
   const [manualElapsedSeconds, setManualElapsedSeconds] = useState(0)
   const [manualStartedAt, setManualStartedAt] = useState<string | null>(null)
   const [focusSessionsCompleted, setFocusSessionsCompleted] = useState(0)
+  const [ocrLoading, setOcrLoading] = useState(false)
+  const [ocrError, setOcrError] = useState<string | null>(null)
+  const [ocrText, setOcrText] = useState('')
+  const [ocrFileName, setOcrFileName] = useState('')
 
   const [logModal, setLogModal] = useState<{ kind: TimerKind; startTime: string; endTime: string } | null>(null)
 
@@ -479,6 +484,26 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     const end = new Date(start.getTime() + manualElapsedSeconds * 1000)
     setManualRunning(false)
     setLogModal({ kind: 'manual', startTime: start.toISOString(), endTime: end.toISOString() })
+  }
+
+  const extractTextFromImage = async (file: File) => {
+    setOcrLoading(true)
+    setOcrError(null)
+    setOcrText('')
+    setOcrFileName(file.name)
+
+    try {
+      const {
+        data: { text },
+      } = await Tesseract.recognize(file, 'eng')
+      setOcrText(text.trim())
+      return text
+    } catch {
+      setOcrError('OCR failed. Please try a clearer image.')
+      return ''
+    } finally {
+      setOcrLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -682,6 +707,38 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                   Save
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="w-full border-white/30 bg-card/55 backdrop-blur-xl shadow-soft">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">📄 Image OCR</CardTitle>
+              <CardDescription>Upload an image and extract text with Tesseract OCR.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <input
+                type="file"
+                accept="image/*"
+                className="block w-full cursor-pointer rounded-md border border-input bg-background px-3 py-2 text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-primary/15 file:px-3 file:py-1.5 file:text-foreground"
+                onChange={async (event) => {
+                  const selectedFile = event.target.files?.[0]
+                  if (!selectedFile) return
+                  await extractTextFromImage(selectedFile)
+                }}
+              />
+
+              {ocrLoading ? (
+                <p className="text-sm text-muted-foreground">Processing image, extracting text...</p>
+              ) : null}
+
+              {ocrError ? <p className="text-sm text-destructive">{ocrError}</p> : null}
+
+              {ocrText ? (
+                <div className="rounded-md border border-border/70 bg-background/70 p-3">
+                  <p className="mb-2 text-xs text-muted-foreground">Extracted from {ocrFileName}</p>
+                  <pre className="whitespace-pre-wrap break-words text-sm">{ocrText}</pre>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

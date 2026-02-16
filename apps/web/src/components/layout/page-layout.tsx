@@ -26,7 +26,7 @@ export function PageHeader({ title, subtitle, actions, className, titleClassName
     >
       <div className="min-w-0 space-y-1">
         <h1 className={cn('text-xl font-semibold leading-tight tracking-tight', titleClassName)}>{title}</h1>
-        {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
+        {subtitle ? <div className="text-sm text-muted-foreground">{subtitle}</div> : null}
       </div>
       {actions ? <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end">{actions}</div> : null}
     </div>

@@ -1,11 +1,13 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import "dotenv/config";
 import { ensureAchievementsTable, recomputeAndStoreAchievements } from "./achievements.js";
 import { getAnalyticsPrediction } from "./analytics-prediction.js";
 import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
 import { ensureFocusGardenTables } from "./focus-garden.js";
+import { ensureGradesTables } from "./grades.js";
 import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
 import { ensureStudyOrganizationTables } from "./organization.js";
@@ -19,6 +21,12 @@ import { ensureAdaptiveTimerTables, getAdaptiveEnabled, getTimerRecommendation, 
 const app = Fastify({ logger: true });
 
 await app.register(cors, { origin: true });
+await app.register(multipart, {
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+  },
+});
 await ensureAchievementsTable();
 await ensureStreakTables();
 await ensureProductivityTables();
@@ -28,6 +36,7 @@ await ensureStudyOrganizationTables();
 await ensurePersonalizationTable();
 await ensureAdaptiveTimerTables();
 await ensureFocusGardenTables();
+await ensureGradesTables();
 
 app.get("/health", async () => ({ ok: true, name: "Swot API" }));
 

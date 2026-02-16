@@ -10,6 +10,7 @@ import {
   Clock3,
   Flower2,
   Gauge,
+  GraduationCap,
   LayoutDashboard,
   Menu,
   PanelLeftClose,
@@ -30,6 +31,7 @@ import { CalendarPage } from '@/features/calendar/calendar-page'
 import { CoursesPage } from '@/features/courses/courses-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
 import { FocusGardenPage } from '@/features/focus-garden/focus-garden-page'
+import { GradesPage } from '@/features/grades/grades-page'
 import { InsightsPage } from '@/features/insights/insights-page'
 import { PlannerPage } from '@/features/planner/planner-page'
 import { SessionsPage } from '@/features/sessions/sessions-page'
@@ -46,6 +48,7 @@ const navigation = [
   { name: 'Sessions', label: 'Sessions', icon: Gauge },
   { name: 'Courses', label: 'Courses', icon: BookOpen },
   { name: 'Planner', label: 'Planner', icon: CalendarClock },
+  { name: 'Grades', label: 'Grades', icon: GraduationCap },
   { name: 'Calendar', label: 'Calendar', icon: CalendarDays },
   { name: 'Insights', label: 'Insights', icon: BarChart3 },
   { name: 'Achievements', label: 'Achievements', icon: Award },
@@ -160,6 +163,7 @@ function App() {
     if (activeNav === 'Timer') return <TimerPage startFocusSignal={startTimerSignal} />
     if (activeNav === 'Courses') return <CoursesPage />
     if (activeNav === 'Planner') return <PlannerPage />
+    if (activeNav === 'Grades') return <GradesPage />
     if (activeNav === 'Calendar') return <CalendarPage />
     if (activeNav === 'Achievements') return <AchievementsPage />
     if (activeNav === 'Insights') return <InsightsPage />

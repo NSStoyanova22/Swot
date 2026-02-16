@@ -10,12 +10,16 @@ type ToastItem = {
   title: string
   description?: string
   variant: ToastVariant
+  actionLabel?: string
+  onAction?: () => void
 }
 
 type ToastInput = {
   title: string
   description?: string
   variant?: ToastVariant
+  actionLabel?: string
+  onAction?: () => void
 }
 
 type ToastContextValue = {
@@ -46,6 +50,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         title: input.title,
         description: input.description,
         variant: input.variant ?? 'default',
+        actionLabel: input.actionLabel,
+        onAction: input.onAction,
       },
     ])
 
@@ -84,6 +90,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   <p className="text-sm font-semibold">{item.title}</p>
                   {item.description ? (
                     <p className="mt-0.5 text-xs text-muted-foreground">{item.description}</p>
+                  ) : null}
+                  {item.actionLabel && item.onAction ? (
+                    <button
+                      type="button"
+                      className="mt-1 text-xs font-semibold text-primary hover:underline"
+                      onClick={() => {
+                        item.onAction?.()
+                        dismiss(item.id)
+                      }}
+                    >
+                      {item.actionLabel}
+                    </button>
                   ) : null}
                 </div>
                 <button

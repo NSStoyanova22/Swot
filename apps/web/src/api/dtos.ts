@@ -131,6 +131,208 @@ export type UpdateCourseDto = {
   name: string
 }
 
+export type GradeScale = 'percentage' | 'german' | 'bulgarian'
+
+export type TermDto = {
+  id: string
+  userId: string
+  schoolYear: string
+  name: string
+  position: number
+  startDate: string | null
+  endDate: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateTermDto = {
+  schoolYear: string
+  name: string
+  position?: number
+  startDate?: string | null
+  endDate?: string | null
+}
+
+export type UpdateTermDto = Partial<CreateTermDto>
+
+export type GradeItemDto = {
+  id: string
+  userId: string
+  termId: string
+  courseId: string
+  categoryId?: string | null
+  scale: GradeScale
+  gradeValue: number
+  performanceScore: number
+  weight: number
+  gradedOn: string
+  note: string | null
+  createdAt: string
+  updatedAt: string
+  term?: {
+    id: string
+    schoolYear: string
+    name: string
+    position: number
+  }
+  course?: {
+    id: string
+    name: string
+  }
+  category?: {
+    id: string
+    name: string
+    weight: number
+    dropLowest: boolean
+  } | null
+}
+
+export type CreateGradeItemDto = {
+  termId: string
+  courseId: string
+  categoryId?: string | null
+  scale: GradeScale
+  gradeValue: number
+  weight?: number
+  gradedOn: string
+  note?: string
+}
+
+export type UpdateGradeItemDto = Partial<CreateGradeItemDto> & {
+  note?: string | null
+}
+
+export type BulkGradeImportDto = {
+  termId: string
+  scale: GradeScale
+  gradedOn?: string
+  items: Array<{
+    courseId: string
+    categoryId?: string | null
+    gradeValue: number
+    weight?: number
+    note?: string
+  }>
+}
+
+export type GradeCategoryDto = {
+  id: string
+  userId: string
+  courseId: string
+  name: string
+  weight: number
+  dropLowest: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type CreateGradeCategoryDto = {
+  courseId: string
+  name: string
+  weight: number
+  dropLowest?: boolean
+}
+
+export type UpdateGradeCategoryDto = Partial<Pick<CreateGradeCategoryDto, 'name' | 'weight' | 'dropLowest'>>
+
+export type GradesWhatIfResultDto = {
+  currentAverage: number | null
+  resultingAverage: number | null
+  delta: number | null
+  categoryAverages: Array<{
+    categoryId: string
+    name: string
+    weight: number
+    dropLowest: boolean
+    currentAverage: number | null
+    resultingAverage: number | null
+  }>
+}
+
+export type BulkGradeImportResultDto = {
+  count: number
+  itemIds: string[]
+}
+
+export type GradePhotoImportItemDto = {
+  courseName: string
+  gradeValue: number
+  confidence: number
+}
+
+export type GradePhotoImportResultDto = {
+  source: 'mock' | 'ocr'
+  fileName: string
+  items: GradePhotoImportItemDto[]
+}
+
+export type OcrTextResponseDto = {
+  fileName: string
+  mimeType: string
+  text: string
+}
+
+export type GradeCourseSummaryDto = {
+  courseId: string
+  courseName: string
+  averageScore: number
+  itemCount: number
+}
+
+export type GradeCourseTrendDto = GradeCourseSummaryDto & {
+  previousAverageScore: number | null
+  delta: number | null
+}
+
+export type GradesSummaryDto = {
+  termId: string | null
+  termName?: string
+  schoolYear?: string
+  overallAverage: number | null
+  previousTermAverage: number | null
+  deltaFromPrevious: number | null
+  bestCourses: GradeCourseSummaryDto[]
+  worstCourses: GradeCourseSummaryDto[]
+  courseTrends: GradeCourseTrendDto[]
+}
+
+export type CourseGradeTargetDto = {
+  id?: string
+  userId: string
+  courseId: string
+  courseName?: string
+  targetScore: number
+  scale: GradeScale
+  targetValue: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type StudyRecommendationDto = {
+  courseId: string
+  courseName: string
+  attentionScore: number
+  recommendedMinutes: number
+  reasons: string[]
+}
+
+export type AcademicRiskLevel = 'low' | 'medium' | 'high'
+
+export type AcademicRiskDto = {
+  courseId: string
+  courseName: string
+  riskScore: number
+  riskLevel: AcademicRiskLevel
+  reasons: string[]
+  suggestedActions: string[]
+  recommendedMinutes: number
+  studyMinutes14d: number
+  upcomingDeadlines: number
+  upcomingExams: number
+  currentAverage: number | null
+  deltaFromPrevious: number | null
+}
+
 export type CreateActivityDto = {
   courseId: string
   name: string
@@ -315,6 +517,18 @@ export type CreatePlannerBlockDto = {
 }
 
 export type UpdatePlannerBlockDto = CreatePlannerBlockDto
+
+export type PlannerAutoAddDto = {
+  courseId: string
+  totalMinutes: number
+  weekStartDate: string
+}
+
+export type PlannerAutoAddResultDto = {
+  blockIds: string[]
+  blocksCount: number
+  dayLabels: string[]
+}
 
 export type PlannerOverviewDto = {
   plannedMinutes: number

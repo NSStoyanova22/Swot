@@ -20,6 +20,10 @@ model User {
   tasks      Task[]
   reminders  Reminder[]
   scheduleBlocks ScheduleBlock[]
+  terms      Term[]
+  gradeItems GradeItem[]
+  gradeCategories GradeCategory[]
+  courseGradeTargets CourseGradeTarget[]
 }
 
 model Course {
@@ -33,8 +37,85 @@ model Course {
   sessions   StudySession[]
   tasks      Task[]
   scheduleBlocks ScheduleBlock[]
+  gradeItems GradeItem[]
+  gradeCategories GradeCategory[]
+  gradeTarget CourseGradeTarget?
 
   @@unique([userId, name])
+}
+
+model Term {
+  id         String   @id @default(cuid())
+  userId     String
+  schoolYear String
+  name       String
+  position   Int      @default(1)
+  startDate  DateTime?
+  endDate    DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id])
+  gradeItems GradeItem[]
+
+  @@index([userId, schoolYear, position])
+}
+
+model GradeItem {
+  id               String   @id @default(cuid())
+  userId           String
+  termId           String
+  courseId         String
+  categoryId       String?
+  scale            String
+  gradeValue       Float
+  performanceScore Float
+  weight           Float    @default(1)
+  gradedOn         DateTime
+  note             String?  @db.Text
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id])
+  term   Term   @relation(fields: [termId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+  category GradeCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([userId, termId, courseId, gradedOn])
+}
+
+model GradeCategory {
+  id         String   @id @default(cuid())
+  userId     String
+  courseId   String
+  name       String
+  weight     Float    @default(20)
+  dropLowest Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id])
+  course     Course    @relation(fields: [courseId], references: [id])
+  gradeItems GradeItem[]
+
+  @@unique([userId, courseId, name])
+  @@index([userId, courseId])
+}
+
+model CourseGradeTarget {
+  id          String   @id @default(cuid())
+  userId      String
+  courseId    String
+  targetScore Float
+  scale       String
+  targetValue Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
 }
 
 model Activity {

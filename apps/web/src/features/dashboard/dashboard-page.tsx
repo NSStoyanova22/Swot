@@ -1,7 +1,8 @@
 import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   Award,
   CalendarDays,
   Flame,
@@ -34,7 +35,10 @@ import {
 import { getActivities } from '@/api/activities'
 import { getAnalyticsPrediction } from '@/api/analytics'
 import { getDistractionAnalytics } from '@/api/distractions'
+import { getAcademicRisk } from '@/api/grades'
 import { getMe } from '@/api/me'
+import { createOrganizationTask } from '@/api/organization'
+import { autoAddPlannerBlocks } from '@/api/planner'
 import { getProductivityOverview } from '@/api/productivity'
 import { getSessions } from '@/api/sessions'
 import { getStreakOverview } from '@/api/streak'
@@ -43,6 +47,7 @@ import { PageContainer, PageHeader, SectionGrid } from '@/components/layout/page
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 
 const sessionsQueryKey = ['sessions'] as const
@@ -73,6 +78,7 @@ type WidgetId =
   | 'trend'
   | 'courseChart'
   | 'timeAnalysis'
+  | 'atRisk'
 
 const defaultWidgetOrder: WidgetId[] = [
   'today',
@@ -87,6 +93,7 @@ const defaultWidgetOrder: WidgetId[] = [
   'trend',
   'courseChart',
   'timeAnalysis',
+  'atRisk',
 ]
 
 const defaultWidgetEnabled: Record<WidgetId, boolean> = {
@@ -102,6 +109,7 @@ const defaultWidgetEnabled: Record<WidgetId, boolean> = {
   trend: true,
   courseChart: true,
   timeAnalysis: true,
+  atRisk: true,
 }
 
 const widgetLabel: Record<WidgetId, string> = {
@@ -117,6 +125,7 @@ const widgetLabel: Record<WidgetId, string> = {
   trend: 'Weekly Productivity Trend',
   courseChart: 'Minutes by Course',
   timeAnalysis: 'Time Analysis',
+  atRisk: 'At Risk',
 }
 
 const widgetLayoutClass: Record<WidgetId, string> = {
@@ -132,6 +141,7 @@ const widgetLayoutClass: Record<WidgetId, string> = {
   trend: 'md:col-span-2 xl:col-span-2',
   courseChart: 'md:col-span-2 xl:col-span-2',
   timeAnalysis: 'md:col-span-2 xl:col-span-2',
+  atRisk: 'md:col-span-2 xl:col-span-2',
 }
 
 function startOfDay(date: Date) {
@@ -244,6 +254,8 @@ function Tile({
 }
 
 export function DashboardPage() {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [schoolLabel, setSchoolLabel] = useState(schoolLabels[1])
   const [heatmapCourseId, setHeatmapCourseId] = useState('all')
   const [heatmapYear, setHeatmapYear] = useState(new Date().getFullYear())
@@ -309,6 +321,55 @@ export function DashboardPage() {
   const distractionQuery = useQuery({
     queryKey: ['distractions-analytics'],
     queryFn: ({ signal }) => getDistractionAnalytics(30, signal),
+  })
+  const academicRiskQuery = useQuery({
+    queryKey: ['academic-risk'],
+    queryFn: ({ signal }) => getAcademicRisk({}, signal),
+  })
+  const addRiskToPlannerMutation = useMutation({
+    mutationFn: ({ courseId, minutes }: { courseId: string; minutes: number }) =>
+      autoAddPlannerBlocks({
+        courseId,
+        totalMinutes: minutes,
+        weekStartDate: startOfWeekMonday(new Date()).toISOString(),
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
+      toast({
+        variant: 'success',
+        title: 'Added to Planner',
+        description: `Added ${result.blocksCount} block${result.blocksCount === 1 ? '' : 's'} to ${result.dayLabels.join(' + ') || 'this week'}.`,
+      })
+    },
+  })
+  const scheduleRevisionMutation = useMutation({
+    mutationFn: ({ courseId, courseName }: { courseId: string; courseName: string }) =>
+      createOrganizationTask({
+        title: `Revision: ${courseName}`,
+        kind: 'exam',
+        priority: 'high',
+        courseId,
+        dueAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+      toast({ variant: 'success', title: 'Revision scheduled' })
+    },
+  })
+  const createChecklistMutation = useMutation({
+    mutationFn: ({ courseId, courseName, actions }: { courseId: string; courseName: string; actions: string[] }) =>
+      createOrganizationTask({
+        title: `Checklist: ${courseName}`,
+        kind: 'task',
+        priority: 'medium',
+        courseId,
+        subtasks: actions.slice(0, 3).map((title) => ({ title })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+      toast({ variant: 'success', title: 'Checklist created' })
+    },
   })
 
   const now = new Date()
@@ -399,6 +460,7 @@ export function DashboardPage() {
   const todayProgress = Math.min(100, Math.round((metrics.todayMinutes / Math.max(todayTarget, 1)) * 100))
 
   const hasData = sessions.length > 0
+  const riskItems = academicRiskQuery.data ?? []
   const streak = streakQuery.data
   const courseOptions = useMemo(() => {
     const map = new Map<string, string>()
@@ -843,6 +905,72 @@ export function DashboardPage() {
                 <Bar dataKey="minutes" fill="hsl(var(--chart-1))" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+    ),
+    atRisk: (
+      <Card className="dashboard-widget h-full shadow-soft">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-destructive" />
+            At Risk
+          </CardTitle>
+          <CardDescription>Courses with elevated academic risk from grades, trend, study time, and upcoming deadlines.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {riskItems.filter((item) => item.riskLevel !== 'low').slice(0, 4).length === 0 ? (
+            <p className="text-sm text-muted-foreground">No high-risk courses right now.</p>
+          ) : (
+            riskItems
+              .filter((item) => item.riskLevel !== 'low')
+              .slice(0, 4)
+              .map((item) => (
+                <div key={item.courseId} className="rounded-md border border-border/70 bg-background/70 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">{item.courseName}</p>
+                    <Badge
+                      variant={item.riskLevel === 'high' ? 'default' : 'secondary'}
+                      className={item.riskLevel === 'high' ? 'bg-destructive/15 text-destructive' : undefined}
+                    >
+                      {item.riskLevel.toUpperCase()}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{item.reasons[0]}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => addRiskToPlannerMutation.mutate({ courseId: item.courseId, minutes: item.recommendedMinutes })}
+                      disabled={addRiskToPlannerMutation.isPending}
+                    >
+                      Add {item.recommendedMinutes}m this week
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => scheduleRevisionMutation.mutate({ courseId: item.courseId, courseName: item.courseName })}
+                      disabled={scheduleRevisionMutation.isPending}
+                    >
+                      Schedule revision
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        createChecklistMutation.mutate({
+                          courseId: item.courseId,
+                          courseName: item.courseName,
+                          actions: item.suggestedActions,
+                        })
+                      }
+                      disabled={createChecklistMutation.isPending}
+                    >
+                      Create checklist
+                    </Button>
+                  </div>
+                </div>
+              ))
           )}
         </CardContent>
       </Card>

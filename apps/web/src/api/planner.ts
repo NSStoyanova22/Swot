@@ -1,6 +1,8 @@
 import { apiRequest } from '@/api/client'
 import type {
   CreatePlannerBlockDto,
+  PlannerAutoAddDto,
+  PlannerAutoAddResultDto,
   PlannerBlockDto,
   PlannerOverviewDto,
   UpdatePlannerBlockDto,
@@ -42,5 +44,12 @@ export async function getPlannerOverview(query: PlannerRangeQuery = {}, signal?:
   return apiRequest<PlannerOverviewDto>('/planner/overview', {
     query,
     signal,
+  })
+}
+
+export async function autoAddPlannerBlocks(body: PlannerAutoAddDto) {
+  return apiRequest<PlannerAutoAddResultDto>('/planner/auto-add', {
+    method: 'POST',
+    body,
   })
 }

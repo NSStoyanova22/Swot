@@ -1,5 +1,8 @@
 import type { FastifyInstance } from "fastify";
+import type { MultipartFile } from "@fastify/multipart";
 import { Prisma } from "@prisma/client";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { recomputeAndStoreAchievements } from "./achievements.js";
 import { prisma } from "./db.js";
 import { addDistraction, getSessionDistractions, isDistractionType } from "./distractions.js";
@@ -7,6 +10,7 @@ import {
   getFocusGardenOverview,
   upsertFocusGardenGrowthFromSession,
 } from "./focus-garden.js";
+import { normalizeGradeScale, toPerformanceScore, type GradeScale } from "./grades.js";
 import {
   computeNextReminderTrigger,
   type ReminderRepeatRule,
@@ -15,6 +19,14 @@ import { recomputeAndStoreProductivity } from "./productivity.js";
 import { recomputeAndStoreStreak } from "./streak.js";
 
 const USER_ID = "swot-user";
+const require = createRequire(import.meta.url);
+const createTesseractWorker = require("tesseract.js-node") as (options: {
+  tessdata: string | Buffer;
+  languages: string[];
+}) => Promise<{ recognize: (input: string | Buffer, language: string) => string }>;
+const defaultTessdataDir = fileURLToPath(new URL("../tessdata", import.meta.url));
+const ocrTessdataDir = process.env.OCR_TESSDATA_DIR ?? defaultTessdataDir;
+let ocrWorkerPromise: Promise<{ recognize: (input: string | Buffer, language: string) => string }> | null = null;
 
 function overlapMinutes(
   aStart: Date,
@@ -43,7 +55,200 @@ function timeToMinutes(value: string) {
   return hours * 60 + minutes;
 }
 
+function toIsoDate(value: Date | string | null) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toISOString().slice(0, 10);
+}
+
+function roundScore(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function weekDayLabel(index: number) {
+  return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index] ?? "Day";
+}
+
+function splitMinutes(totalMinutes: number, sessionLength: number) {
+  const chunks: number[] = [];
+  let remaining = Math.max(0, Math.round(totalMinutes));
+  const base = clamp(Math.round(sessionLength), 25, 120);
+  const minChunk = Math.max(20, Math.round(base * 0.6));
+
+  while (remaining > 0) {
+    if (remaining <= base) {
+      if (remaining < minChunk && chunks.length > 0) {
+        const lastIndex = chunks.length - 1;
+        const current = chunks[lastIndex] ?? 0;
+        chunks[lastIndex] = current + remaining;
+      } else {
+        chunks.push(remaining);
+      }
+      break;
+    }
+
+    if (remaining < base * 2 && remaining > base + minChunk) {
+      const first = Math.round(remaining / 2);
+      chunks.push(first);
+      chunks.push(remaining - first);
+      break;
+    }
+
+    chunks.push(base);
+    remaining -= base;
+  }
+
+  return chunks;
+}
+
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = createTesseractWorker({
+      tessdata: ocrTessdataDir,
+      languages: ["eng"],
+    });
+  }
+  return ocrWorkerPromise;
+}
+
+function findOpenPlannerSlot(
+  dayDate: Date,
+  existingBlocks: Array<{ startTime: Date; endTime: Date }>,
+  durationMinutes: number
+) {
+  const slotStarts = ["08:00", "10:00", "14:00", "16:00", "18:00", "20:00"];
+
+  for (const slot of slotStarts) {
+    const [h = 8, m = 0] = slot.split(":").map(Number);
+    const start = new Date(dayDate);
+    start.setHours(h, m, 0, 0);
+    const end = new Date(start.getTime() + durationMinutes * 60_000);
+
+    const overlaps = existingBlocks.some((block) =>
+      overlapMinutes(start, end, block.startTime, block.endTime) > 0
+    );
+    if (!overlaps) return { start, end };
+  }
+
+  const fallbackStart = new Date(dayDate);
+  fallbackStart.setHours(20, 0, 0, 0);
+  return {
+    start: fallbackStart,
+    end: new Date(fallbackStart.getTime() + durationMinutes * 60_000),
+  };
+}
+
+const DEFAULT_GRADE_CATEGORIES = [
+  { name: "Exam", weight: 30 },
+  { name: "Quiz", weight: 20 },
+  { name: "Homework", weight: 15 },
+  { name: "Project", weight: 20 },
+  { name: "Final", weight: 15 },
+];
+
+type GradeCategoryRow = {
+  id: number;
+  user_id: string;
+  course_id: string;
+  name: string;
+  weight: number;
+  drop_lowest: number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+type GradeItemScoreRow = {
+  id: number;
+  category_id: number | null;
+  performance_score: number;
+  weight: number;
+};
+
+function computeCategoryAverages(
+  categories: Array<{ id: number; name: string; weight: number; dropLowest: boolean }>,
+  items: GradeItemScoreRow[]
+) {
+  const itemsByCategory = new Map<number, GradeItemScoreRow[]>();
+  for (const item of items) {
+    if (!item.category_id) continue;
+    const bucket = itemsByCategory.get(item.category_id) ?? [];
+    bucket.push(item);
+    itemsByCategory.set(item.category_id, bucket);
+  }
+
+  return categories.map((category) => {
+    const rawItems = (itemsByCategory.get(category.id) ?? []).slice();
+    if (category.dropLowest && rawItems.length > 1) {
+      rawItems.sort((a, b) => Number(a.performance_score) - Number(b.performance_score));
+      rawItems.shift();
+    }
+    const totalWeight = rawItems.reduce((sum, item) => sum + Number(item.weight), 0);
+    const weighted =
+      totalWeight > 0
+        ? rawItems.reduce(
+            (sum, item) => sum + Number(item.performance_score) * Number(item.weight),
+            0
+          ) / totalWeight
+        : null;
+
+    return {
+      categoryId: String(category.id),
+      name: category.name,
+      weight: Number(category.weight),
+      dropLowest: category.dropLowest,
+      itemsCount: rawItems.length,
+      averageScore: weighted == null ? null : roundScore(weighted),
+    };
+  });
+}
+
+function computeOverallFromCategoryAverages(
+  categoryAverages: Array<{ weight: number; averageScore: number | null }>
+) {
+  const present = categoryAverages.filter((item) => item.averageScore != null && item.weight > 0);
+  if (!present.length) return null;
+  const totalWeight = present.reduce((sum, item) => sum + item.weight, 0);
+  if (totalWeight <= 0) return null;
+  const weighted = present.reduce(
+    (sum, item) => sum + (item.averageScore ?? 0) * item.weight,
+    0
+  );
+  return roundScore(weighted / totalWeight);
+}
+
 export async function routes(app: FastifyInstance) {
+  app.post("/ocr", async (req, reply) => {
+    const file = (await req.file()) as MultipartFile | undefined;
+    if (!file) {
+      return reply.code(400).send({ error: "Missing image file in multipart form-data field 'file'." });
+    }
+
+    if (!file.mimetype.startsWith("image/")) {
+      return reply.code(400).send({ error: `Unsupported file type '${file.mimetype}'.` });
+    }
+
+    try {
+      const worker = await getOcrWorker();
+      const bytes = await file.toBuffer();
+      const text = worker.recognize(bytes, "eng").trim();
+
+      return {
+        fileName: file.filename,
+        mimeType: file.mimetype,
+        text,
+      };
+    } catch (error) {
+      req.log.error({ err: error }, "OCR failed");
+      return reply.code(500).send({
+        error: "OCR failed. Ensure OCR_TESSDATA_DIR contains eng.traineddata.",
+      });
+    }
+  });
+
   // Courses
   app.get("/courses", async () => {
     return prisma.course.findMany({
@@ -154,7 +359,1436 @@ export async function routes(app: FastifyInstance) {
     });
   });
 
+  // Terms
+  app.get("/terms", async (req) => {
+    const query = req.query as { schoolYear?: string };
+    const schoolYear = query.schoolYear?.trim();
+
+    const terms = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        user_id: string;
+        school_year: string;
+        name: string;
+        position: number;
+        start_date: Date | null;
+        end_date: Date | null;
+        created_at: Date;
+        updated_at: Date;
+      }>
+    >`
+      SELECT id, user_id, school_year, name, position, start_date, end_date, created_at, updated_at
+      FROM terms
+      WHERE user_id = ${USER_ID}
+      ${schoolYear ? Prisma.sql`AND school_year = ${schoolYear}` : Prisma.empty}
+      ORDER BY school_year DESC, position ASC, created_at ASC
+    `;
+
+    return terms.map((term) => ({
+      id: String(term.id),
+      userId: term.user_id,
+      schoolYear: term.school_year,
+      name: term.name,
+      position: term.position,
+      startDate: toIsoDate(term.start_date),
+      endDate: toIsoDate(term.end_date),
+      createdAt: term.created_at.toISOString(),
+      updatedAt: term.updated_at.toISOString(),
+    }));
+  });
+
+  app.post("/terms", async (req) => {
+    const body = req.body as {
+      schoolYear: string;
+      name: string;
+      position?: number;
+      startDate?: string | null;
+      endDate?: string | null;
+    };
+    const schoolYear = body.schoolYear.trim();
+    const name = body.name.trim();
+    const position = Number.isFinite(body.position) ? Math.max(1, Math.round(body.position ?? 1)) : 1;
+    const startDate = body.startDate ? new Date(body.startDate) : null;
+    const endDate = body.endDate ? new Date(body.endDate) : null;
+
+    await prisma.$executeRaw`
+      INSERT INTO terms (user_id, school_year, name, position, start_date, end_date)
+      VALUES (${USER_ID}, ${schoolYear}, ${name}, ${position}, ${startDate}, ${endDate})
+    `;
+
+    const row = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        created_at: Date;
+        updated_at: Date;
+      }>
+    >`
+      SELECT id, created_at, updated_at
+      FROM terms
+      WHERE user_id = ${USER_ID}
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+
+    const inserted = row[0];
+    if (!inserted) throw new Error("Could not create term");
+
+    return {
+      id: String(inserted.id),
+      userId: USER_ID,
+      schoolYear,
+      name,
+      position,
+      startDate: toIsoDate(startDate),
+      endDate: toIsoDate(endDate),
+      createdAt: inserted.created_at.toISOString(),
+      updatedAt: inserted.updated_at.toISOString(),
+    };
+  });
+
+  app.put("/terms/:id", async (req) => {
+    const params = req.params as { id: string };
+    const body = req.body as {
+      schoolYear?: string;
+      name?: string;
+      position?: number;
+      startDate?: string | null;
+      endDate?: string | null;
+    };
+
+    const rows = await prisma.$queryRaw<Array<{ id: number }>>`
+      SELECT id
+      FROM terms
+      WHERE id = ${Number(params.id)} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    if (rows.length === 0) throw new Error("Term not found");
+
+    const current = await prisma.$queryRaw<
+      Array<{
+        school_year: string;
+        name: string;
+        position: number;
+        start_date: Date | null;
+        end_date: Date | null;
+      }>
+    >`
+      SELECT school_year, name, position, start_date, end_date
+      FROM terms
+      WHERE id = ${Number(params.id)}
+      LIMIT 1
+    `;
+    const currentRow = current[0];
+    if (!currentRow) throw new Error("Term not found");
+
+    const schoolYear = body.schoolYear?.trim() || currentRow.school_year;
+    const name = body.name?.trim() || currentRow.name;
+    const position = Number.isFinite(body.position) ? Math.max(1, Math.round(body.position as number)) : currentRow.position;
+    const startDate = body.startDate === undefined ? currentRow.start_date : body.startDate ? new Date(body.startDate) : null;
+    const endDate = body.endDate === undefined ? currentRow.end_date : body.endDate ? new Date(body.endDate) : null;
+
+    await prisma.$executeRaw`
+      UPDATE terms
+      SET school_year = ${schoolYear},
+          name = ${name},
+          position = ${position},
+          start_date = ${startDate},
+          end_date = ${endDate}
+      WHERE id = ${Number(params.id)} AND user_id = ${USER_ID}
+    `;
+
+    return {
+      id: params.id,
+      userId: USER_ID,
+      schoolYear,
+      name,
+      position,
+      startDate: toIsoDate(startDate),
+      endDate: toIsoDate(endDate),
+    };
+  });
+
+  app.delete("/terms/:id", async (req) => {
+    const params = req.params as { id: string };
+    const termId = Number(params.id);
+
+    await prisma.$executeRaw`
+      DELETE FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${termId}
+    `;
+    await prisma.$executeRaw`
+      DELETE FROM terms
+      WHERE user_id = ${USER_ID} AND id = ${termId}
+    `;
+
+    return { ok: true };
+  });
+
+  // Grade categories
+  app.get("/grade-categories", async (req) => {
+    const query = req.query as { courseId?: string };
+    const courseId = query.courseId?.trim() || null;
+
+    if (courseId) {
+      const existing = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM grade_categories
+        WHERE user_id = ${USER_ID} AND course_id = ${courseId}
+        LIMIT 1
+      `;
+      if (!existing.length) {
+        for (const category of DEFAULT_GRADE_CATEGORIES) {
+          await prisma.$executeRaw`
+            INSERT INTO grade_categories (user_id, course_id, name, weight, drop_lowest)
+            VALUES (${USER_ID}, ${courseId}, ${category.name}, ${category.weight}, ${0})
+          `;
+        }
+      }
+    }
+
+    const rows = await prisma.$queryRaw<GradeCategoryRow[]>`
+      SELECT id, user_id, course_id, name, weight, drop_lowest, created_at, updated_at
+      FROM grade_categories
+      WHERE user_id = ${USER_ID}
+      ${courseId ? Prisma.sql`AND course_id = ${courseId}` : Prisma.empty}
+      ORDER BY course_id ASC, name ASC
+    `;
+
+    return rows.map((row) => ({
+      id: String(row.id),
+      userId: row.user_id,
+      courseId: row.course_id,
+      name: row.name,
+      weight: Number(row.weight),
+      dropLowest: Boolean(row.drop_lowest),
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  });
+
+  app.post("/grade-categories", async (req) => {
+    const body = req.body as {
+      courseId: string;
+      name: string;
+      weight: number;
+      dropLowest?: boolean;
+    };
+    const courseId = body.courseId?.trim();
+    const name = body.name?.trim();
+    if (!courseId || !name) throw new Error("Missing category courseId or name");
+
+    await prisma.course.findFirstOrThrow({
+      where: { id: courseId, userId: USER_ID },
+      select: { id: true },
+    });
+
+    const weight = clamp(Number(body.weight), 0, 100);
+    const dropLowest = body.dropLowest ? 1 : 0;
+
+    await prisma.$executeRaw`
+      INSERT INTO grade_categories (user_id, course_id, name, weight, drop_lowest)
+      VALUES (${USER_ID}, ${courseId}, ${name}, ${weight}, ${dropLowest})
+    `;
+
+    const row = await prisma.$queryRaw<GradeCategoryRow[]>`
+      SELECT id, user_id, course_id, name, weight, drop_lowest, created_at, updated_at
+      FROM grade_categories
+      WHERE user_id = ${USER_ID}
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+    const created = row[0];
+    if (!created) throw new Error("Could not create grade category");
+
+    return {
+      id: String(created.id),
+      userId: created.user_id,
+      courseId: created.course_id,
+      name: created.name,
+      weight: Number(created.weight),
+      dropLowest: Boolean(created.drop_lowest),
+      createdAt: created.created_at.toISOString(),
+      updatedAt: created.updated_at.toISOString(),
+    };
+  });
+
+  app.put("/grade-categories/:id", async (req) => {
+    const params = req.params as { id: string };
+    const categoryId = Number(params.id);
+    const body = req.body as {
+      name?: string;
+      weight?: number;
+      dropLowest?: boolean;
+    };
+
+    const currentRows = await prisma.$queryRaw<GradeCategoryRow[]>`
+      SELECT id, user_id, course_id, name, weight, drop_lowest, created_at, updated_at
+      FROM grade_categories
+      WHERE id = ${categoryId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    const current = currentRows[0];
+    if (!current) throw new Error("Grade category not found");
+
+    const name = body.name?.trim() || current.name;
+    const weight = body.weight === undefined ? Number(current.weight) : clamp(Number(body.weight), 0, 100);
+    const dropLowest = body.dropLowest === undefined ? Boolean(current.drop_lowest) : Boolean(body.dropLowest);
+
+    await prisma.$executeRaw`
+      UPDATE grade_categories
+      SET name = ${name},
+          weight = ${weight},
+          drop_lowest = ${dropLowest ? 1 : 0}
+      WHERE id = ${categoryId} AND user_id = ${USER_ID}
+    `;
+
+    return {
+      id: String(categoryId),
+      userId: current.user_id,
+      courseId: current.course_id,
+      name,
+      weight,
+      dropLowest,
+    };
+  });
+
+  app.delete("/grade-categories/:id", async (req) => {
+    const params = req.params as { id: string };
+    const categoryId = Number(params.id);
+
+    await prisma.$executeRaw`
+      UPDATE grade_items
+      SET category_id = NULL
+      WHERE user_id = ${USER_ID} AND category_id = ${categoryId}
+    `;
+    await prisma.$executeRaw`
+      DELETE FROM grade_categories
+      WHERE id = ${categoryId} AND user_id = ${USER_ID}
+    `;
+
+    return { ok: true };
+  });
+
+  // Grades
+  app.get("/grades", async (req) => {
+    const query = req.query as { termId?: string; courseId?: string };
+    const termId = query.termId ? Number(query.termId) : null;
+    const courseId = query.courseId?.trim() || null;
+
+    const rows = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        user_id: string;
+        term_id: number;
+        course_id: string;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        graded_on: Date;
+        note: string | null;
+        created_at: Date;
+        updated_at: Date;
+        term_name: string;
+        term_school_year: string;
+        term_position: number;
+        course_name: string;
+        category_id: number | null;
+        category_name: string | null;
+        category_weight: number | null;
+        category_drop_lowest: number | null;
+      }>
+    >`
+      SELECT
+        g.id,
+        g.user_id,
+        g.term_id,
+        g.course_id,
+        g.scale,
+        g.grade_value,
+        g.performance_score,
+        g.weight,
+        g.graded_on,
+        g.note,
+        g.created_at,
+        g.updated_at,
+        t.name AS term_name,
+        t.school_year AS term_school_year,
+        t.position AS term_position,
+        c.name AS course_name,
+        gc.id AS category_id,
+        gc.name AS category_name,
+        gc.weight AS category_weight,
+        gc.drop_lowest AS category_drop_lowest
+      FROM grade_items g
+      INNER JOIN terms t ON t.id = g.term_id
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+      LEFT JOIN grade_categories gc ON gc.id = g.category_id
+      WHERE g.user_id = ${USER_ID}
+      ${termId ? Prisma.sql`AND g.term_id = ${termId}` : Prisma.empty}
+      ${courseId ? Prisma.sql`AND g.course_id = ${courseId}` : Prisma.empty}
+      ORDER BY g.graded_on DESC, g.created_at DESC
+    `;
+
+    return rows.map((row) => ({
+      id: String(row.id),
+      userId: row.user_id,
+      termId: String(row.term_id),
+      courseId: row.course_id,
+      scale: normalizeGradeScale(row.scale),
+      gradeValue: Number(row.grade_value),
+      performanceScore: Number(row.performance_score),
+      weight: Number(row.weight),
+      gradedOn: toIsoDate(row.graded_on),
+      note: row.note,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      term: {
+        id: String(row.term_id),
+        schoolYear: row.term_school_year,
+        name: row.term_name,
+        position: row.term_position,
+      },
+      course: {
+        id: row.course_id,
+        name: row.course_name,
+      },
+      categoryId: row.category_id ? String(row.category_id) : null,
+      category: row.category_id
+        ? {
+            id: String(row.category_id),
+            name: row.category_name ?? "Category",
+            weight: Number(row.category_weight ?? 0),
+            dropLowest: Boolean(row.category_drop_lowest ?? 0),
+          }
+        : null,
+    }));
+  });
+
+  app.post("/grades", async (req) => {
+    const body = req.body as {
+      termId: string;
+      courseId: string;
+      categoryId?: string | null;
+      scale: GradeScale;
+      gradeValue: number;
+      weight?: number;
+      gradedOn: string;
+      note?: string;
+    };
+
+    const termId = Number(body.termId);
+    const scale = normalizeGradeScale(body.scale);
+    const gradeValue = Number(body.gradeValue);
+    const weight = Math.max(0.05, Number(body.weight ?? 1));
+    const gradedOn = new Date(body.gradedOn);
+    const performanceScore = toPerformanceScore(scale, gradeValue);
+    const categoryId = body.categoryId ? Number(body.categoryId) : null;
+
+    await prisma.$queryRaw`
+      SELECT id
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    if (categoryId) {
+      const categoryRows = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM grade_categories
+        WHERE id = ${categoryId} AND user_id = ${USER_ID} AND course_id = ${body.courseId}
+        LIMIT 1
+      `;
+      if (!categoryRows.length) throw new Error("Invalid grade category");
+    }
+
+    await prisma.$executeRaw`
+      INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note)
+      VALUES (${USER_ID}, ${termId}, ${body.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${gradedOn}, ${
+      body.note?.trim() || null
+    })
+    `;
+
+    const row = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        created_at: Date;
+        updated_at: Date;
+      }>
+    >`
+      SELECT id, created_at, updated_at
+      FROM grade_items
+      WHERE user_id = ${USER_ID}
+      ORDER BY id DESC
+      LIMIT 1
+    `;
+
+    const inserted = row[0];
+    if (!inserted) throw new Error("Could not create grade");
+
+    return {
+      id: String(inserted.id),
+      userId: USER_ID,
+      termId: String(termId),
+      courseId: body.courseId,
+      categoryId: categoryId ? String(categoryId) : null,
+      scale,
+      gradeValue,
+      performanceScore: roundScore(performanceScore),
+      weight,
+      gradedOn: toIsoDate(gradedOn),
+      note: body.note?.trim() || null,
+      createdAt: inserted.created_at.toISOString(),
+      updatedAt: inserted.updated_at.toISOString(),
+    };
+  });
+
+  app.post("/grades/bulk", async (req) => {
+    const body = req.body as {
+      termId: string;
+      scale: GradeScale;
+      gradedOn?: string;
+      items: Array<{
+        courseId: string;
+        categoryId?: string | null;
+        gradeValue: number;
+        weight?: number;
+        note?: string;
+      }>;
+    };
+
+    const termId = Number(body.termId);
+    if (!Number.isFinite(termId)) {
+      return { count: 0, items: [] };
+    }
+
+    const scale = normalizeGradeScale(body.scale);
+    const gradedOn = body.gradedOn ? new Date(body.gradedOn) : new Date();
+    const payload = Array.isArray(body.items) ? body.items : [];
+    if (!payload.length) return { count: 0, items: [] };
+
+    await prisma.$queryRaw`
+      SELECT id
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+
+    const insertedIds: string[] = [];
+    for (const item of payload) {
+      const gradeValue = Number(item.gradeValue);
+      const weight = Math.max(0.05, Number(item.weight ?? 1));
+      const performanceScore = toPerformanceScore(scale, gradeValue);
+      const categoryId = item.categoryId ? Number(item.categoryId) : null;
+      if (categoryId) {
+        const categoryRows = await prisma.$queryRaw<Array<{ id: number }>>`
+          SELECT id
+          FROM grade_categories
+          WHERE id = ${categoryId} AND user_id = ${USER_ID} AND course_id = ${item.courseId}
+          LIMIT 1
+        `;
+        if (!categoryRows.length) throw new Error("Invalid grade category");
+      }
+      await prisma.$executeRaw`
+        INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note)
+        VALUES (${USER_ID}, ${termId}, ${item.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${gradedOn}, ${
+        item.note?.trim() || null
+      })
+      `;
+      const row = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM grade_items
+        WHERE user_id = ${USER_ID}
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+      const last = row[0];
+      if (last) insertedIds.push(String(last.id));
+    }
+
+    return {
+      count: insertedIds.length,
+      itemIds: insertedIds,
+    };
+  });
+
+  app.post("/grades/import-photo", async (req) => {
+    const body = req.body as {
+      imageDataUrl?: string;
+      fileName?: string;
+      scale?: GradeScale;
+      termId?: string;
+    };
+
+    // TODO(OCR): Replace mock extraction with real OCR pipeline.
+    // Suggested integration points:
+    // 1) Upload image bytes to OCR provider/service.
+    // 2) Parse recognized text into { courseName, gradeValue } candidates.
+    // 3) Return confidence + source spans for UI highlighting.
+    if (!body.imageDataUrl) {
+      return { items: [] };
+    }
+
+    const mockItems = [
+      { courseName: "Math", gradeValue: 5.25, confidence: 0.94 },
+      { courseName: "German", gradeValue: 4.5, confidence: 0.89 },
+      { courseName: "English", gradeValue: 5.75, confidence: 0.92 },
+    ];
+
+    return {
+      source: "mock",
+      fileName: body.fileName ?? "upload",
+      items: mockItems,
+    };
+  });
+
+  app.put("/grades/:id", async (req) => {
+    const params = req.params as { id: string };
+    const gradeId = Number(params.id);
+    const body = req.body as {
+      termId?: string;
+      courseId?: string;
+      categoryId?: string | null;
+      scale?: GradeScale;
+      gradeValue?: number;
+      weight?: number;
+      gradedOn?: string;
+      note?: string | null;
+    };
+
+    const currentRows = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        term_id: number;
+        course_id: string;
+        category_id: number | null;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        graded_on: Date;
+        note: string | null;
+      }>
+    >`
+      SELECT id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note
+      FROM grade_items
+      WHERE id = ${gradeId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    const current = currentRows[0];
+    if (!current) throw new Error("Grade item not found");
+
+    const scale = body.scale ? normalizeGradeScale(body.scale) : normalizeGradeScale(current.scale);
+    const gradeValue = body.gradeValue === undefined ? Number(current.grade_value) : Number(body.gradeValue);
+    const termId = body.termId ? Number(body.termId) : Number(current.term_id);
+    const courseId = body.courseId ?? current.course_id;
+    const categoryId =
+      body.categoryId === undefined ? current.category_id : body.categoryId ? Number(body.categoryId) : null;
+    const weight = body.weight === undefined ? Number(current.weight) : Math.max(0.05, Number(body.weight));
+    const gradedOn = body.gradedOn ? new Date(body.gradedOn) : new Date(current.graded_on);
+    const note = body.note === undefined ? current.note : body.note?.trim() || null;
+    const performanceScore = toPerformanceScore(scale, gradeValue);
+    if (categoryId) {
+      const categoryRows = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM grade_categories
+        WHERE id = ${categoryId} AND user_id = ${USER_ID} AND course_id = ${courseId}
+        LIMIT 1
+      `;
+      if (!categoryRows.length) throw new Error("Invalid grade category");
+    }
+
+    await prisma.$executeRaw`
+      UPDATE grade_items
+      SET term_id = ${termId},
+          course_id = ${courseId},
+          category_id = ${categoryId},
+          scale = ${scale},
+          grade_value = ${gradeValue},
+          performance_score = ${performanceScore},
+          weight = ${weight},
+          graded_on = ${gradedOn},
+          note = ${note}
+      WHERE id = ${gradeId} AND user_id = ${USER_ID}
+    `;
+
+    return {
+      id: String(gradeId),
+      userId: USER_ID,
+      termId: String(termId),
+      courseId,
+      categoryId: categoryId ? String(categoryId) : null,
+      scale,
+      gradeValue,
+      performanceScore: roundScore(performanceScore),
+      weight,
+      gradedOn: toIsoDate(gradedOn),
+      note,
+    };
+  });
+
+  app.delete("/grades/:id", async (req) => {
+    const params = req.params as { id: string };
+    const gradeId = Number(params.id);
+    await prisma.$executeRaw`
+      DELETE FROM grade_items
+      WHERE id = ${gradeId} AND user_id = ${USER_ID}
+    `;
+    return { ok: true };
+  });
+
+  app.post("/grades/what-if", async (req) => {
+    const body = req.body as {
+      termId: string;
+      courseId: string;
+      categoryId: string;
+      scale: GradeScale;
+      gradeValue: number;
+      weight?: number;
+    };
+
+    const termId = Number(body.termId);
+    const categoryId = Number(body.categoryId);
+    const hypotheticalWeight = Math.max(0.05, Number(body.weight ?? 1));
+    const hypotheticalScore = toPerformanceScore(normalizeGradeScale(body.scale), Number(body.gradeValue));
+
+    if (!Number.isFinite(termId) || !body.courseId || !Number.isFinite(categoryId)) {
+      return {
+        currentAverage: null,
+        resultingAverage: null,
+        delta: null,
+        categoryAverages: [],
+      };
+    }
+
+    const categoryRows = await prisma.$queryRaw<
+      Array<{ id: number; name: string; weight: number; drop_lowest: number }>
+    >`
+      SELECT id, name, weight, drop_lowest
+      FROM grade_categories
+      WHERE user_id = ${USER_ID} AND course_id = ${body.courseId}
+      ORDER BY name ASC
+    `;
+    if (!categoryRows.length) {
+      return {
+        currentAverage: null,
+        resultingAverage: null,
+        delta: null,
+        categoryAverages: [],
+      };
+    }
+
+    const categories = categoryRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      weight: Number(row.weight),
+      dropLowest: Boolean(row.drop_lowest),
+    }));
+
+    const baseItems = await prisma.$queryRaw<GradeItemScoreRow[]>`
+      SELECT id, category_id, performance_score, weight
+      FROM grade_items
+      WHERE user_id = ${USER_ID}
+        AND term_id = ${termId}
+        AND course_id = ${body.courseId}
+    `;
+
+    const currentCategoryAverages = computeCategoryAverages(categories, baseItems);
+    const currentAverage = computeOverallFromCategoryAverages(currentCategoryAverages);
+
+    const augmentedItems = [
+      ...baseItems,
+      {
+        id: -1,
+        category_id: categoryId,
+        performance_score: hypotheticalScore,
+        weight: hypotheticalWeight,
+      },
+    ];
+
+    const resultingCategoryAverages = computeCategoryAverages(categories, augmentedItems);
+    const resultingAverage = computeOverallFromCategoryAverages(resultingCategoryAverages);
+
+    const categoriesWithResult = categories.map((category, index) => ({
+      categoryId: String(category.id),
+      name: category.name,
+      weight: category.weight,
+      dropLowest: category.dropLowest,
+      currentAverage: currentCategoryAverages[index]?.averageScore ?? null,
+      resultingAverage: resultingCategoryAverages[index]?.averageScore ?? null,
+    }));
+
+    return {
+      currentAverage,
+      resultingAverage,
+      delta:
+        currentAverage == null || resultingAverage == null
+          ? null
+          : roundScore(resultingAverage - currentAverage),
+      categoryAverages: categoriesWithResult,
+    };
+  });
+
+  app.get("/grades/targets", async () => {
+    const rows = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        user_id: string;
+        course_id: string;
+        target_score: number;
+        scale: string;
+        target_value: number;
+        created_at: Date;
+        updated_at: Date;
+        course_name: string;
+      }>
+    >`
+      SELECT
+        t.id,
+        t.user_id,
+        t.course_id,
+        t.target_score,
+        t.scale,
+        t.target_value,
+        t.created_at,
+        t.updated_at,
+        c.name AS course_name
+      FROM course_grade_targets t
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY t.course_id
+      WHERE t.user_id = ${USER_ID}
+      ORDER BY c.name ASC
+    `;
+
+    return rows.map((row) => ({
+      id: String(row.id),
+      userId: row.user_id,
+      courseId: row.course_id,
+      courseName: row.course_name,
+      targetScore: Number(row.target_score),
+      scale: normalizeGradeScale(row.scale),
+      targetValue: Number(row.target_value),
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  });
+
+  app.put("/grades/targets/:courseId", async (req) => {
+    const params = req.params as { courseId: string };
+    const body = req.body as { scale: GradeScale; targetValue: number };
+    const scale = normalizeGradeScale(body.scale);
+    const targetValue = Number(body.targetValue);
+    const targetScore = toPerformanceScore(scale, targetValue);
+
+    await prisma.$executeRaw`
+      INSERT INTO course_grade_targets (user_id, course_id, target_score, scale, target_value)
+      VALUES (${USER_ID}, ${params.courseId}, ${targetScore}, ${scale}, ${targetValue})
+      ON DUPLICATE KEY UPDATE
+        target_score = VALUES(target_score),
+        scale = VALUES(scale),
+        target_value = VALUES(target_value)
+    `;
+
+    return {
+      userId: USER_ID,
+      courseId: params.courseId,
+      scale,
+      targetValue,
+      targetScore: roundScore(targetScore),
+    };
+  });
+
+  app.get("/recommendations/study-plan", async (req) => {
+    const query = req.query as { termId?: string; from?: string; to?: string };
+    const termId = Number(query.termId);
+    if (!Number.isFinite(termId)) return [];
+
+    const toDate = query.to ? new Date(query.to) : new Date();
+    const fromDate = query.from
+      ? new Date(query.from)
+      : new Date(toDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+    const gradeRows = await prisma.$queryRaw<
+      Array<{
+        course_id: string;
+        course_name: string;
+        average_score: number;
+        weighted_score: number;
+      }>
+    >`
+      SELECT
+        g.course_id,
+        c.name AS course_name,
+        AVG(g.performance_score) AS average_score,
+        (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score
+      FROM grade_items g
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+      WHERE g.user_id = ${USER_ID} AND g.term_id = ${termId}
+      GROUP BY g.course_id, c.name
+    `;
+
+    const trendRows = await prisma.$queryRaw<
+      Array<{
+        course_id: string;
+        graded_on: Date;
+        performance_score: number;
+      }>
+    >`
+      SELECT course_id, graded_on, performance_score
+      FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${termId}
+      ORDER BY graded_on DESC, id DESC
+    `;
+
+    const studyRows = await prisma.$queryRaw<
+      Array<{
+        course_id: string;
+        course_name: string;
+        total_minutes: number;
+      }>
+    >`
+      SELECT
+        s.\`courseId\` AS course_id,
+        c.name AS course_name,
+        SUM(s.\`durationMinutes\`) AS total_minutes
+      FROM \`StudySession\` s
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY s.\`courseId\`
+      WHERE s.\`userId\` = ${USER_ID} AND s.\`startTime\` >= ${fromDate} AND s.\`startTime\` < ${toDate}
+      GROUP BY s.course_id, c.name
+    `;
+
+    const targetRows = await prisma.$queryRaw<
+      Array<{
+        course_id: string;
+        target_score: number;
+      }>
+    >`
+      SELECT course_id, target_score
+      FROM course_grade_targets
+      WHERE user_id = ${USER_ID}
+    `;
+
+    const courses = await prisma.course.findMany({
+      where: { userId: USER_ID },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+
+    const gradeByCourse = new Map(
+      gradeRows.map((row) => [row.course_id, Number(row.weighted_score ?? row.average_score ?? 0)])
+    );
+    const minutesByCourse = new Map(
+      studyRows.map((row) => [row.course_id, Number(row.total_minutes ?? 0)])
+    );
+    const targetByCourse = new Map(
+      targetRows.map((row) => [row.course_id, Number(row.target_score)])
+    );
+
+    const trendByCourse = new Map<string, number>();
+    const groupedTrend = new Map<string, number[]>();
+    for (const row of trendRows) {
+      const list = groupedTrend.get(row.course_id) ?? [];
+      if (list.length < 5) list.push(Number(row.performance_score));
+      groupedTrend.set(row.course_id, list);
+    }
+    groupedTrend.forEach((scores, courseId) => {
+      if (scores.length < 2) {
+        trendByCourse.set(courseId, 0);
+        return;
+      }
+      const newest = scores[0] ?? 0;
+      const oldest = scores[scores.length - 1] ?? 0;
+      trendByCourse.set(courseId, newest - oldest);
+    });
+
+    const result = courses.map((course) => {
+      const gradeScore = gradeByCourse.get(course.id) ?? null;
+      const trend = trendByCourse.get(course.id) ?? 0;
+      const studyMinutes = minutesByCourse.get(course.id) ?? 0;
+      const targetScore = targetByCourse.get(course.id) ?? 80;
+
+      let attention = 0;
+      const reasons: string[] = [];
+
+      if (gradeScore == null) {
+        attention += 36;
+        reasons.push("No grades recorded in this term yet.");
+      } else {
+        const gradeGap = clamp(targetScore - gradeScore, 0, 50);
+        if (gradeGap > 0) {
+          attention += gradeGap * 1.2;
+          reasons.push(`Grade performance (${roundScore(gradeScore)}) is below target (${roundScore(targetScore)}).`);
+        }
+      }
+
+      if (trend < -2) {
+        attention += clamp(Math.abs(trend) * 1.25, 0, 24);
+        reasons.push("Grade trend is declining.");
+      }
+
+      const lowStudyGap = clamp(140 - studyMinutes, 0, 140);
+      if (lowStudyGap > 0) {
+        attention += (lowStudyGap / 140) * 28;
+        reasons.push(`Study time is low (${Math.round(studyMinutes)} min in last 14 days).`);
+      }
+
+      const attentionScore = clamp(Math.round(attention), 0, 100);
+      const recommendedMinutes = clamp(Math.round((80 + attentionScore * 1.6) / 15) * 15, 60, 240);
+
+      return {
+        courseId: course.id,
+        courseName: course.name,
+        attentionScore,
+        recommendedMinutes,
+        reasons: reasons.length ? reasons : ["Maintain current progress with steady study cadence."],
+      };
+    });
+
+    return result.sort((a, b) => b.attentionScore - a.attentionScore);
+  });
+
+  app.get("/analytics/academic-risk", async (req) => {
+    const query = req.query as { termId?: string; from?: string; to?: string };
+    let termId = query.termId ? Number(query.termId) : NaN;
+
+    if (!Number.isFinite(termId)) {
+      const fallbackTerm = await prisma.$queryRaw<
+        Array<{ id: number }>
+      >`
+        SELECT id
+        FROM terms
+        WHERE user_id = ${USER_ID}
+        ORDER BY school_year DESC, position DESC, id DESC
+        LIMIT 1
+      `;
+      termId = fallbackTerm[0]?.id ?? NaN;
+    }
+
+    if (!Number.isFinite(termId)) return [];
+
+    const termRows = await prisma.$queryRaw<
+      Array<{ id: number; school_year: string; position: number }>
+    >`
+      SELECT id, school_year, position
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    const term = termRows[0];
+    if (!term) return [];
+
+    const previousTermRows = await prisma.$queryRaw<
+      Array<{ id: number }>
+    >`
+      SELECT id
+      FROM terms
+      WHERE user_id = ${USER_ID}
+        AND school_year = ${term.school_year}
+        AND position < ${term.position}
+      ORDER BY position DESC, id DESC
+      LIMIT 1
+    `;
+    const previousTermId = previousTermRows[0]?.id ?? null;
+
+    const toDate = query.to ? new Date(query.to) : new Date();
+    const fromDate = query.from
+      ? new Date(query.from)
+      : new Date(toDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const upcomingEnd = new Date(toDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+    const courses = await prisma.course.findMany({
+      where: { userId: USER_ID },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    if (!courses.length) return [];
+
+    const currentGradeRows = await prisma.$queryRaw<
+      Array<{ course_id: string; weighted_score: number | null }>
+    >`
+      SELECT course_id, (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
+      FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${term.id}
+      GROUP BY course_id
+    `;
+    const previousGradeRows = previousTermId
+      ? await prisma.$queryRaw<Array<{ course_id: string; weighted_score: number | null }>>`
+          SELECT course_id, (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
+          FROM grade_items
+          WHERE user_id = ${USER_ID} AND term_id = ${previousTermId}
+          GROUP BY course_id
+        `
+      : [];
+
+    const studyRows = await prisma.$queryRaw<
+      Array<{ course_id: string; total_minutes: number | null }>
+    >`
+      SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
+      FROM \`StudySession\` s
+      WHERE s.\`userId\` = ${USER_ID}
+        AND s.\`startTime\` >= ${fromDate}
+        AND s.\`startTime\` < ${toDate}
+      GROUP BY s.\`courseId\`
+    `;
+
+    const deadlineRows = await prisma.$queryRaw<
+      Array<{ course_id: string; deadlines_count: number; exams_count: number }>
+    >`
+      SELECT
+        course_id,
+        COUNT(*) AS deadlines_count,
+        SUM(CASE WHEN kind = 'exam' THEN 1 ELSE 0 END) AS exams_count
+      FROM tasks
+      WHERE user_id = ${USER_ID}
+        AND status <> 'done'
+        AND due_at IS NOT NULL
+        AND due_at >= ${toDate}
+        AND due_at < ${upcomingEnd}
+        AND course_id IS NOT NULL
+      GROUP BY course_id
+    `;
+
+    const currentByCourse = new Map(
+      currentGradeRows.map((row) => [row.course_id, row.weighted_score == null ? null : Number(row.weighted_score)])
+    );
+    const previousByCourse = new Map(
+      previousGradeRows.map((row) => [row.course_id, row.weighted_score == null ? null : Number(row.weighted_score)])
+    );
+    const studyByCourse = new Map(
+      studyRows.map((row) => [row.course_id, Number(row.total_minutes ?? 0)])
+    );
+    const deadlinesByCourse = new Map(
+      deadlineRows.map((row) => [
+        row.course_id,
+        { deadlines: Number(row.deadlines_count ?? 0), exams: Number(row.exams_count ?? 0) },
+      ])
+    );
+
+    const totalStudy = courses.reduce((sum, course) => sum + (studyByCourse.get(course.id) ?? 0), 0);
+    const averageStudy = totalStudy / Math.max(1, courses.length);
+
+    const result = courses.map((course) => {
+      const currentAverage = currentByCourse.get(course.id) ?? null;
+      const previousAverage = previousByCourse.get(course.id) ?? null;
+      const deltaFromPrevious =
+        currentAverage == null || previousAverage == null ? null : roundScore(currentAverage - previousAverage);
+      const studyMinutes = studyByCourse.get(course.id) ?? 0;
+      const upcoming = deadlinesByCourse.get(course.id) ?? { deadlines: 0, exams: 0 };
+
+      const reasons: string[] = [];
+      const suggestedActions: string[] = [];
+      let riskPoints = 0;
+
+      if (currentAverage == null) {
+        riskPoints += 20;
+        reasons.push("No grade average yet for this term.");
+      } else if (currentAverage < 60) {
+        riskPoints += 40;
+        reasons.push(`Low grade average (${roundScore(currentAverage)}).`);
+      } else if (currentAverage < 70) {
+        riskPoints += 28;
+        reasons.push(`Grade average is below safe range (${roundScore(currentAverage)}).`);
+      } else if (currentAverage < 80) {
+        riskPoints += 14;
+      }
+
+      if (deltaFromPrevious != null && deltaFromPrevious < -1) {
+        const trendPenalty = clamp(Math.abs(deltaFromPrevious) * 1.5, 6, 24);
+        riskPoints += trendPenalty;
+        reasons.push(`Downward trend vs previous term (${deltaFromPrevious.toFixed(1)}).`);
+      }
+
+      if (averageStudy > 0) {
+        const studyRatio = studyMinutes / averageStudy;
+        if (studyRatio < 0.6) {
+          riskPoints += 20;
+          reasons.push(`Low study time (${Math.round(studyMinutes)} min in 14 days).`);
+        } else if (studyRatio < 0.85) {
+          riskPoints += 12;
+          reasons.push(`Study time is below your course average (${Math.round(studyMinutes)} min).`);
+        }
+      }
+
+      if (upcoming.exams > 0 || upcoming.deadlines > 0) {
+        const deadlinePenalty = clamp(upcoming.exams * 12 + upcoming.deadlines * 5, 5, 24);
+        riskPoints += deadlinePenalty;
+        reasons.push(
+          `${upcoming.exams} upcoming exam${upcoming.exams === 1 ? "" : "s"} and ${upcoming.deadlines} deadline${upcoming.deadlines === 1 ? "" : "s"} in 14 days.`
+        );
+      }
+
+      const riskScore = clamp(Math.round(riskPoints), 0, 100);
+      const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
+      const recommendedMinutes = riskLevel === "high" ? 120 : riskLevel === "medium" ? 60 : 30;
+
+      suggestedActions.push(`Add ${recommendedMinutes}m this week`);
+      if (upcoming.exams > 0 || riskLevel !== "low") {
+        suggestedActions.push("Schedule revision");
+      }
+      suggestedActions.push("Create checklist");
+
+      return {
+        courseId: course.id,
+        courseName: course.name,
+        riskScore,
+        riskLevel,
+        reasons: reasons.length ? reasons : ["Current performance is stable."],
+        suggestedActions,
+        recommendedMinutes,
+        studyMinutes14d: Math.round(studyMinutes),
+        upcomingDeadlines: upcoming.deadlines,
+        upcomingExams: upcoming.exams,
+        currentAverage: currentAverage == null ? null : roundScore(currentAverage),
+        deltaFromPrevious,
+      };
+    });
+
+    return result.sort((a, b) => b.riskScore - a.riskScore);
+  });
+
+  app.get("/analytics/grades-summary", async (req) => {
+    const query = req.query as { termId?: string };
+    const termId = Number(query.termId);
+    if (!Number.isFinite(termId)) {
+      return { termId: null, overallAverage: null, previousTermAverage: null, deltaFromPrevious: null, bestCourses: [], worstCourses: [], courseTrends: [] };
+    }
+
+    const termRows = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        school_year: string;
+        name: string;
+        position: number;
+      }>
+    >`
+      SELECT id, school_year, name, position
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    const term = termRows[0];
+    if (!term) {
+      return { termId: null, overallAverage: null, previousTermAverage: null, deltaFromPrevious: null, bestCourses: [], worstCourses: [], courseTrends: [] };
+    }
+
+    const termsInYear = await prisma.$queryRaw<
+      Array<{ id: number; position: number }>
+    >`
+      SELECT id, position
+      FROM terms
+      WHERE user_id = ${USER_ID} AND school_year = ${term.school_year}
+      ORDER BY position ASC, id ASC
+    `;
+    const currentIndex = termsInYear.findIndex((item) => item.id === term.id);
+    const previousTerm = currentIndex > 0 ? termsInYear[currentIndex - 1] : undefined;
+    const previousTermId = previousTerm?.id ?? null;
+
+    const weightedRows = await prisma.$queryRaw<
+      Array<{ course_id: string; course_name: string; weighted_score: number; item_count: number }>
+    >`
+      SELECT
+        g.course_id,
+        c.name AS course_name,
+        (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score,
+        COUNT(*) AS item_count
+      FROM grade_items g
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+      WHERE g.user_id = ${USER_ID} AND g.term_id = ${term.id}
+      GROUP BY g.course_id, c.name
+      ORDER BY weighted_score DESC
+    `;
+
+    const overallRow = await prisma.$queryRaw<Array<{ weighted_score: number | null }>>`
+      SELECT
+        (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
+      FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${term.id}
+    `;
+
+    const previousRow = previousTermId
+      ? await prisma.$queryRaw<Array<{ weighted_score: number | null }>>`
+          SELECT
+            (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
+          FROM grade_items
+          WHERE user_id = ${USER_ID} AND term_id = ${previousTermId}
+        `
+      : [{ weighted_score: null }];
+
+    const previousCourseRows = previousTermId
+      ? await prisma.$queryRaw<Array<{ course_id: string; weighted_score: number }>>`
+          SELECT
+            g.course_id,
+            (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score
+          FROM grade_items g
+          WHERE g.user_id = ${USER_ID} AND g.term_id = ${previousTermId}
+          GROUP BY g.course_id
+        `
+      : [];
+    const previousByCourse = new Map(previousCourseRows.map((row) => [row.course_id, Number(row.weighted_score)]));
+
+    const ranked = weightedRows
+      .map((row) => ({
+        courseId: row.course_id,
+        courseName: row.course_name,
+        averageScore: roundScore(Number(row.weighted_score)),
+        itemCount: Number(row.item_count),
+      }))
+      .sort((a, b) => b.averageScore - a.averageScore);
+
+    const courseTrends = ranked.map((row) => {
+      const previousScore = previousByCourse.get(row.courseId);
+      return {
+        ...row,
+        previousAverageScore: previousScore === undefined ? null : roundScore(previousScore),
+        delta: previousScore === undefined ? null : roundScore(row.averageScore - previousScore),
+      };
+    });
+
+    const overallAverage = overallRow[0]?.weighted_score == null ? null : roundScore(Number(overallRow[0].weighted_score));
+    const previousTermAverage =
+      previousRow[0]?.weighted_score == null ? null : roundScore(Number(previousRow[0].weighted_score));
+
+    return {
+      termId: String(term.id),
+      termName: term.name,
+      schoolYear: term.school_year,
+      overallAverage,
+      previousTermAverage,
+      deltaFromPrevious:
+        overallAverage != null && previousTermAverage != null
+          ? roundScore(overallAverage - previousTermAverage)
+          : null,
+      bestCourses: ranked.slice(0, 3),
+      worstCourses: [...ranked].reverse().slice(0, 3).reverse(),
+      courseTrends,
+    };
+  });
+
   // Planner
+  app.post("/planner/auto-add", async (req) => {
+    const body = req.body as {
+      courseId: string;
+      totalMinutes: number;
+      weekStartDate: string;
+    };
+
+    const totalMinutes = Math.max(0, Math.round(Number(body.totalMinutes)));
+    if (!body.courseId || !body.weekStartDate || totalMinutes <= 0) {
+      return { blockIds: [], dayLabels: [], blocksCount: 0 };
+    }
+
+    const weekStart = new Date(body.weekStartDate);
+    weekStart.setHours(0, 0, 0, 0);
+    const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    await prisma.course.findFirstOrThrow({
+      where: { id: body.courseId, userId: USER_ID },
+      select: { id: true },
+    });
+
+    const settings = await prisma.settings.findUnique({
+      where: { userId: USER_ID },
+      select: { shortSessionMinutes: true },
+    });
+    const sessionLength = settings?.shortSessionMinutes ?? 45;
+    const chunks = splitMinutes(totalMinutes, sessionLength);
+
+    const plannedRows = await prisma.$queryRaw<
+      Array<{
+        id: number;
+        start_time: Date;
+        end_time: Date;
+      }>
+    >`
+      SELECT id, start_time, end_time
+      FROM planned_study_blocks
+      WHERE user_id = ${USER_ID}
+        AND start_time >= ${weekStart}
+        AND start_time < ${weekEnd}
+      ORDER BY start_time ASC
+    `;
+
+    const targets = await prisma.dailyTarget.findMany({
+      where: { userId: USER_ID },
+      select: { weekday: true, targetMinutes: true },
+    });
+    const targetByDay = new Map<number, number>(
+      targets.map((item) => [item.weekday, item.targetMinutes])
+    );
+
+    const blocksByDay = new Map<number, Array<{ startTime: Date; endTime: Date }>>();
+    const plannedMinutesByDay = new Map<number, number>();
+    for (let day = 0; day < 7; day += 1) {
+      blocksByDay.set(day, []);
+      plannedMinutesByDay.set(day, 0);
+    }
+
+    plannedRows.forEach((row) => {
+      const start = new Date(row.start_time);
+      const end = new Date(row.end_time);
+      const dayIndex = (start.getDay() + 6) % 7;
+      const list = blocksByDay.get(dayIndex) ?? [];
+      list.push({ startTime: start, endTime: end });
+      blocksByDay.set(dayIndex, list);
+
+      const minutes = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60_000));
+      plannedMinutesByDay.set(
+        dayIndex,
+        (plannedMinutesByDay.get(dayIndex) ?? 0) + minutes
+      );
+    });
+
+    const insertedIds: string[] = [];
+    const usedDays = new Set<number>();
+
+    for (const chunkMinutes of chunks) {
+      const rankedDays = Array.from({ length: 7 }, (_, dayIndex) => {
+        const planned = plannedMinutesByDay.get(dayIndex) ?? 0;
+        const target = targetByDay.get(dayIndex + 1) ?? 90;
+        const remaining = target - planned;
+        const loadRatio = target > 0 ? planned / target : planned / 90;
+        return { dayIndex, planned, target, remaining, loadRatio };
+      }).sort((a, b) => {
+        if (b.remaining !== a.remaining) return b.remaining - a.remaining;
+        return a.loadRatio - b.loadRatio;
+      });
+
+      const chosen = rankedDays[0];
+      if (!chosen) continue;
+
+      const dayDate = new Date(weekStart);
+      dayDate.setDate(dayDate.getDate() + chosen.dayIndex);
+      const dayBlocks = blocksByDay.get(chosen.dayIndex) ?? [];
+      const slot = findOpenPlannerSlot(dayDate, dayBlocks, chunkMinutes);
+
+      await prisma.$executeRaw`
+        INSERT INTO planned_study_blocks (user_id, course_id, activity_id, start_time, end_time, note)
+        VALUES (${USER_ID}, ${body.courseId}, ${null}, ${slot.start}, ${slot.end}, ${`Auto-added ${chunkMinutes}m from recommendations`})
+      `;
+      const inserted = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM planned_study_blocks
+        WHERE user_id = ${USER_ID}
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+      const last = inserted[0];
+      if (last) insertedIds.push(String(last.id));
+
+      dayBlocks.push({ startTime: slot.start, endTime: slot.end });
+      blocksByDay.set(chosen.dayIndex, dayBlocks);
+      plannedMinutesByDay.set(
+        chosen.dayIndex,
+        (plannedMinutesByDay.get(chosen.dayIndex) ?? 0) + chunkMinutes
+      );
+      usedDays.add(chosen.dayIndex);
+    }
+
+    return {
+      blockIds: insertedIds,
+      blocksCount: insertedIds.length,
+      dayLabels: Array.from(usedDays).sort((a, b) => a - b).map(weekDayLabel),
+    };
+  });
+
   app.get("/planner/blocks", async (req) => {
     const query = req.query as { from?: string; to?: string };
     const from = query.from ? new Date(query.from) : null;

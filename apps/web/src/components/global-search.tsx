@@ -25,6 +25,7 @@ type SearchTarget =
   | 'Sessions'
   | 'Courses'
   | 'Planner'
+  | 'Grades'
   | 'Calendar'
   | 'Insights'
   | 'Achievements'
@@ -149,6 +150,7 @@ export function GlobalSearch({
       { title: 'Timer', subtitle: '⏱️ Pomodoro and manual timer' },
       { title: 'Courses', subtitle: '📚 Course and activity management' },
       { title: 'Planner', subtitle: '🗓️ Weekly study planning' },
+      { title: 'Grades', subtitle: '🎓 Terms and weighted grade tracking' },
       { title: 'Calendar', subtitle: '📅 Monthly schedule' },
       { title: 'Insights', subtitle: '🔍 Learning analytics' },
       { title: 'Achievements', subtitle: '🏅 Badges and medals' },
