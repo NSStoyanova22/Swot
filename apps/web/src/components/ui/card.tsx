@@ -1,17 +1,23 @@
 import * as React from 'react'
+import { motion } from 'framer-motion'
 
 import { cn } from '@/lib/utils'
 
 function Card({ className, ...props }: React.ComponentProps<'div'>) {
   return (
-    <div
-      data-slot="card"
-      className={cn(
-        'rounded-xl border border-border/60 bg-card/95 text-card-foreground shadow-sm backdrop-blur-sm transition-all hover:shadow-soft',
-        className,
-      )}
-      {...props}
-    />
+    <motion.div
+      whileHover={{ y: -3, scale: 1.004, boxShadow: '0 14px 32px rgba(15, 23, 42, 0.12)' }}
+      transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <div
+        data-slot="card"
+        className={cn(
+          'rounded-xl border border-border/60 bg-card/95 text-card-foreground shadow-sm backdrop-blur-sm transition-all',
+          className,
+        )}
+        {...props}
+      />
+    </motion.div>
   )
 }
 

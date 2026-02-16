@@ -25,6 +25,10 @@
   --input: 343 30% 88%;
   --ring: 336 80% 58%;
   --radius: 0.9rem;
+  --motion-fast: 0.16s;
+  --motion-medium: 0.24s;
+  --motion-slow: 0.34s;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --bg-accent:
     radial-gradient(circle at 0% 0%, rgba(253, 220, 229, 0.7), transparent 38%),
     radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
@@ -55,6 +59,32 @@
     radial-gradient(circle at 95% 10%, rgba(252, 231, 243, 0.7), transparent 34%);
 }
 
+[data-theme='purple'] {
+  --background: 266 58% 97%;
+  --foreground: 265 24% 21%;
+  --card: 0 0% 100%;
+  --card-foreground: 265 24% 21%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 265 24% 21%;
+  --primary: 270 76% 58%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 272 55% 93%;
+  --secondary-foreground: 265 24% 21%;
+  --muted: 268 42% 92%;
+  --muted-foreground: 263 16% 42%;
+  --accent: 272 60% 90%;
+  --accent-foreground: 265 24% 21%;
+  --destructive: 0 80% 56%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 269 28% 84%;
+  --input: 269 28% 84%;
+  --ring: 270 76% 58%;
+  --bg-accent:
+    radial-gradient(circle at 0% 0%, rgba(225, 211, 253, 0.66), transparent 40%),
+    radial-gradient(circle at 98% 8%, rgba(235, 218, 255, 0.62), transparent 36%);
+}
+
+[data-theme='minimal'],
 [data-theme='neutral'] {
   --background: 42 20% 97%;
   --foreground: 30 10% 20%;
@@ -117,7 +147,9 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition:
+    background-color var(--motion-medium) var(--motion-ease),
+    color var(--motion-medium) var(--motion-ease);
 }
 
 #root {
@@ -126,6 +158,21 @@ body {
 
 .app-surface {
   background-image: var(--bg-accent);
+}
+
+.heatmap-cell {
+  animation: heatmap-fade 320ms ease-out both;
+}
+
+@keyframes heatmap-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @layer base {

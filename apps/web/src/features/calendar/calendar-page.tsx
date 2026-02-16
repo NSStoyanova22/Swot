@@ -4,7 +4,8 @@ import { CalendarDays, ChevronLeft, ChevronRight, Plus, Save } from 'lucide-reac
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
-import type { CreateSessionDto, SessionDto } from '@/api/dtos'
+import type { CreateSessionDto, PlannerBlockDto, SessionDto } from '@/api/dtos'
+import { getPlannerBlocks } from '@/api/planner'
 import { createSession, getSessions, updateSession } from '@/api/sessions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,8 +19,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
+import { MarkdownPreview } from '@/components/ui/markdown-preview'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
 type SessionEditorState = {
@@ -153,6 +155,10 @@ function SessionEditorDialog({
     mutationFn: createSession,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['streak'] })
+      queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
       onSaved()
     },
     onError: () => setError('Could not save session.'),
@@ -162,6 +168,10 @@ function SessionEditorDialog({
     mutationFn: ({ id, payload }: { id: string; payload: CreateSessionDto }) => updateSession(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['streak'] })
+      queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
       onSaved()
     },
     onError: () => setError('Could not update session.'),
@@ -307,14 +317,12 @@ function SessionEditorDialog({
               </label>
             </div>
 
-            <label className="space-y-1.5">
-              <span className="text-sm font-medium">Note</span>
-              <Textarea
-                value={form.note}
-                onChange={(event) => setForm((current) => (current ? { ...current, note: event.target.value } : current))}
-                placeholder="Optional notes"
-              />
-            </label>
+            <MarkdownNoteEditor
+              label="Note (Markdown)"
+              value={form.note}
+              onChange={(value) => setForm((current) => (current ? { ...current, note: value } : current))}
+              placeholder="Optional notes. Supports Markdown."
+            />
 
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
@@ -338,18 +346,25 @@ export function CalendarPage() {
   const [currentMonth, setCurrentMonth] = useState(() => startOfMonth(new Date()))
   const [selectedDayKey, setSelectedDayKey] = useState(() => toDateKey(new Date()))
   const [editorState, setEditorState] = useState<EditorModalState | null>(null)
+  const monthFrom = startOfMonth(currentMonth)
+  const monthTo = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1)
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions'],
-    queryFn: ({ signal }) => getSessions(signal),
+    queryFn: ({ signal }) => getSessions({}, signal),
   })
   const activitiesQuery = useQuery({
     queryKey: ['activities'],
     queryFn: ({ signal }) => getActivities(signal),
   })
+  const plannerQuery = useQuery({
+    queryKey: ['planner-blocks', 'calendar-month', monthFrom.toISOString(), monthTo.toISOString()],
+    queryFn: ({ signal }) => getPlannerBlocks({ from: monthFrom.toISOString(), to: monthTo.toISOString() }, signal),
+  })
 
   const sessions = sessionsQuery.data ?? []
   const activities = activitiesQuery.data ?? []
+  const plannerBlocks = plannerQuery.data ?? []
 
   const fallbackColorByCourse = useMemo(() => {
     const map = new Map<string, string>()
@@ -370,6 +385,8 @@ export function CalendarPage() {
 
     const dayTotals = new Map<string, number>()
     const dayColors = new Map<string, string[]>()
+    const plannedTotals = new Map<string, number>()
+    const plannedColors = new Map<string, string[]>()
 
     sessions.forEach((session) => {
       const startedAt = new Date(session.startTime)
@@ -383,8 +400,20 @@ export function CalendarPage() {
       }
     })
 
-    return { days, dayTotals, dayColors }
-  }, [currentMonth, fallbackColorByCourse, sessions])
+    plannerBlocks.forEach((block) => {
+      const start = new Date(block.startTime)
+      const key = toDateKey(start)
+      plannedTotals.set(key, (plannedTotals.get(key) ?? 0) + block.plannedMinutes)
+
+      const color = block.activity?.color ?? fallbackColorByCourse.get(block.courseId) ?? '#ec4899'
+      const current = plannedColors.get(key) ?? []
+      if (!current.includes(color)) {
+        plannedColors.set(key, [...current, color])
+      }
+    })
+
+    return { days, dayTotals, dayColors, plannedTotals, plannedColors }
+  }, [currentMonth, fallbackColorByCourse, plannerBlocks, sessions])
 
   const selectedDate = parseDateKey(selectedDayKey)
   const selectedSessions = useMemo(() => {
@@ -393,7 +422,13 @@ export function CalendarPage() {
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
   }, [selectedDayKey, sessions])
 
-  if (sessionsQuery.isPending) {
+  const selectedPlannedBlocks = useMemo(() => {
+    return plannerBlocks
+      .filter((block) => toDateKey(new Date(block.startTime)) === selectedDayKey)
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+  }, [plannerBlocks, selectedDayKey])
+
+  if (sessionsQuery.isPending || plannerQuery.isPending) {
     return (
       <section className="grid gap-4 xl:grid-cols-[1.7fr_1fr]">
         <Card className="shadow-soft">
@@ -469,7 +504,9 @@ export function CalendarPage() {
               const isCurrentMonth = date.getMonth() === currentMonth.getMonth()
               const isSelected = key === selectedDayKey
               const totalMinutes = monthMeta.dayTotals.get(key) ?? 0
+              const plannedMinutes = monthMeta.plannedTotals.get(key) ?? 0
               const colors = monthMeta.dayColors.get(key) ?? []
+              const planned = monthMeta.plannedColors.get(key) ?? []
 
               return (
                 <button
@@ -486,6 +523,9 @@ export function CalendarPage() {
                   <p className="mt-1 text-xs text-muted-foreground">
                     {totalMinutes > 0 ? formatMinutes(totalMinutes) : 'No sessions'}
                   </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground/85">
+                    {plannedMinutes > 0 ? `Planned: ${formatMinutes(plannedMinutes)}` : 'No plan'}
+                  </p>
                   <div className="mt-2 flex flex-wrap gap-1">
                     {colors.slice(0, 5).map((color) => (
                       <span
@@ -495,6 +535,18 @@ export function CalendarPage() {
                       />
                     ))}
                     {colors.length > 5 ? <span className="text-[10px] text-muted-foreground">+{colors.length - 5}</span> : null}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {planned.slice(0, 4).map((color) => (
+                      <span
+                        key={`${key}-planned-${color}`}
+                        className="h-2.5 w-2.5 rounded-full border"
+                        style={{ borderColor: color, backgroundColor: 'transparent' }}
+                      />
+                    ))}
+                    {planned.length > 4 ? (
+                      <span className="text-[10px] text-muted-foreground">+{planned.length - 4}</span>
+                    ) : null}
                   </div>
                 </button>
               )
@@ -514,7 +566,9 @@ export function CalendarPage() {
                   day: 'numeric',
                 })}
               </CardTitle>
-              <CardDescription>{selectedSessions.length} session(s)</CardDescription>
+              <CardDescription>
+                {selectedSessions.length} actual session(s) · {selectedPlannedBlocks.length} planned block(s)
+              </CardDescription>
             </div>
             <Button onClick={() => setEditorState({ mode: 'create', selectedDate })}>
               <Plus className="h-4 w-4" />
@@ -523,6 +577,40 @@ export function CalendarPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planned blocks</p>
+            {selectedPlannedBlocks.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
+                No planned blocks for this day.
+              </div>
+            ) : (
+              selectedPlannedBlocks.map((block: PlannerBlockDto) => (
+                <div key={`planned-${block.id}`} className="rounded-lg border border-border/70 bg-background/75 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{block.course?.name ?? 'Course'}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(block.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {' - '}
+                        {new Date(block.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {' · '}
+                        {formatMinutes(block.plannedMinutes)}
+                      </p>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={cn(block.status === 'missed' && 'border-destructive/40 text-destructive')}
+                    >
+                      {block.status}
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Actual sessions</p>
           {selectedSessions.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
               No sessions logged for this day yet.
@@ -557,11 +645,14 @@ export function CalendarPage() {
                       {session.activity.name}
                     </span>
                   ) : null}
-                  {session.note ? <p className="text-muted-foreground">{session.note}</p> : null}
+                  {session.note ? (
+                    <MarkdownPreview value={session.note} className="text-xs text-muted-foreground" />
+                  ) : null}
                 </div>
               </div>
             ))
           )}
+          </div>
         </CardContent>
       </Card>
 

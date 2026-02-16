@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Award,
   BarChart3,
   BookOpen,
+  CalendarClock,
   CalendarDays,
   Clock3,
   Gauge,
@@ -10,7 +12,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
+  RefreshCcw,
   Settings,
   Sparkles,
   X,
@@ -18,15 +20,19 @@ import {
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { GlobalSearch } from '@/components/global-search'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { AchievementsPage } from '@/features/achievements/achievements-page'
 import { CalendarPage } from '@/features/calendar/calendar-page'
 import { CoursesPage } from '@/features/courses/courses-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
 import { InsightsPage } from '@/features/insights/insights-page'
+import { PlannerPage } from '@/features/planner/planner-page'
 import { SessionsPage } from '@/features/sessions/sessions-page'
 import { SettingsPage } from '@/features/settings/settings-page'
 import { TimerPage } from '@/features/timer/timer-page'
+import { useSessionSync } from '@/hooks/use-session-sync'
+import { useTheme, type ThemeName } from '@/hooks/use-theme'
 import { cn } from '@/lib/utils'
 
 const navigation = [
@@ -34,6 +40,7 @@ const navigation = [
   { name: 'Timer', icon: Clock3 },
   { name: 'Sessions', icon: Gauge },
   { name: 'Courses', icon: BookOpen },
+  { name: 'Planner', icon: CalendarClock },
   { name: 'Calendar', icon: CalendarDays },
   { name: 'Insights', icon: BarChart3 },
   { name: 'Achievements', icon: Award },
@@ -41,22 +48,105 @@ const navigation = [
 ] as const
 
 type NavName = (typeof navigation)[number]['name']
-type ThemeName = 'pink' | 'neutral' | 'dark'
-
 function App() {
   const [activeNav, setActiveNav] = useState<NavName>('Dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const [theme, setTheme] = useState<ThemeName>(() => {
-    const stored = window.localStorage.getItem('swot-theme')
-    if (stored === 'pink' || stored === 'neutral' || stored === 'dark') return stored
-    return 'pink'
-  })
+  const [createSessionSignal, setCreateSessionSignal] = useState(0)
+  const [startTimerSignal, setStartTimerSignal] = useState(0)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const { theme, setTheme, options: themeOptions } = useTheme()
+  const sync = useSessionSync()
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    window.localStorage.setItem('swot-theme', theme)
-  }, [theme])
+    if (!mobileSidebarOpen) return
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileSidebarOpen(false)
+    }
+    window.addEventListener('keydown', onEscape)
+    return () => window.removeEventListener('keydown', onEscape)
+  }, [mobileSidebarOpen])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable
+
+      if (isTypingTarget && !event.metaKey && !event.ctrlKey && !event.altKey) return
+
+      if ((event.metaKey || event.ctrlKey) && event.key === '/') {
+        event.preventDefault()
+        setShortcutsOpen(true)
+        return
+      }
+
+      if (event.key === '?') {
+        event.preventDefault()
+        setShortcutsOpen(true)
+        return
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === 't') {
+        event.preventDefault()
+        setActiveNav('Timer')
+        setStartTimerSignal((current) => current + 1)
+        return
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === 'l') {
+        event.preventDefault()
+        setActiveNav('Sessions')
+        setCreateSessionSignal((current) => current + 1)
+        return
+      }
+
+      if (event.altKey) {
+        const pageByIndex: Record<string, NavName> = {
+          '1': 'Dashboard',
+          '2': 'Timer',
+          '3': 'Sessions',
+          '4': 'Courses',
+          '5': 'Planner',
+          '6': 'Calendar',
+          '7': 'Insights',
+          '8': 'Achievements',
+          '9': 'Settings',
+        }
+        const targetPage = pageByIndex[event.key]
+        if (targetPage) {
+          event.preventDefault()
+          setActiveNav(targetPage)
+          setMobileSidebarOpen(false)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  const syncBadgeLabel = sync.isSyncing
+    ? `Syncing ${sync.pendingCount}`
+    : sync.pendingCount > 0
+      ? `Queued ${sync.pendingCount}`
+      : 'Synced'
+
+  const syncBadgeVariant = sync.pendingCount > 0 ? 'secondary' : 'outline'
+
+  const renderActivePage = () => {
+    if (activeNav === 'Settings') return <SettingsPage />
+    if (activeNav === 'Sessions') return <SessionsPage openCreateSignal={createSessionSignal} />
+    if (activeNav === 'Timer') return <TimerPage startFocusSignal={startTimerSignal} />
+    if (activeNav === 'Courses') return <CoursesPage />
+    if (activeNav === 'Planner') return <PlannerPage />
+    if (activeNav === 'Calendar') return <CalendarPage />
+    if (activeNav === 'Achievements') return <AchievementsPage />
+    if (activeNav === 'Insights') return <InsightsPage />
+    return <DashboardPage />
+  }
 
   return (
     <div className="app-surface min-h-screen bg-background font-sans text-foreground">
@@ -70,12 +160,14 @@ function App() {
       ) : null}
 
       <div className="flex min-h-screen">
-        <aside
+        <motion.aside
+          layout
           className={cn(
             'fixed inset-y-0 left-0 z-40 border-r border-border/70 bg-card/90 p-4 backdrop-blur-sm transition-all duration-200 md:static md:translate-x-0',
             sidebarCollapsed ? 'md:w-20' : 'md:w-64',
             mobileSidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-64',
           )}
+          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
           <div className="flex h-14 items-center justify-between gap-2 px-1">
             <div className="flex items-center gap-2 overflow-hidden">
@@ -99,25 +191,26 @@ function App() {
 
           <nav className="mt-4 space-y-1">
             {navigation.map((item) => (
-              <Button
-                key={item.name}
-                variant={activeNav === item.name ? 'secondary' : 'ghost'}
-                className={cn(
-                  'h-10 w-full justify-start gap-3 rounded-lg px-3',
-                  sidebarCollapsed && 'md:justify-center md:px-0',
-                  activeNav === item.name && 'border border-border/50',
-                )}
-                onClick={() => {
-                  setActiveNav(item.name)
-                  setMobileSidebarOpen(false)
-                }}
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                <span className={cn(sidebarCollapsed && 'md:hidden')}>{item.name}</span>
-              </Button>
+              <motion.div key={item.name} whileHover={{ x: 2 }} whileTap={{ scale: 0.99 }}>
+                <Button
+                  variant={activeNav === item.name ? 'secondary' : 'ghost'}
+                  className={cn(
+                    'h-10 w-full justify-start gap-3 rounded-lg px-3',
+                    sidebarCollapsed && 'md:justify-center md:px-0',
+                    activeNav === item.name && 'border border-border/50',
+                  )}
+                  onClick={() => {
+                    setActiveNav(item.name)
+                    setMobileSidebarOpen(false)
+                  }}
+                >
+                  <item.icon className="h-4 w-4 shrink-0" />
+                  <span className={cn(sidebarCollapsed && 'md:hidden')}>{item.name}</span>
+                </Button>
+              </motion.div>
             ))}
           </nav>
-        </aside>
+        </motion.aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border/70 bg-background/80 px-4 backdrop-blur-sm md:px-8">
@@ -137,46 +230,82 @@ function App() {
             </div>
 
             <div className="flex items-center gap-2 md:gap-3">
-              <div className="relative hidden md:block">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/80" />
-                <Input className="w-64 pl-9" placeholder="Search sessions..." />
-              </div>
+              <GlobalSearch
+                onNavigate={(target) => {
+                  setActiveNav(target)
+                  setMobileSidebarOpen(false)
+                }}
+                onCreateSession={() => {
+                  setActiveNav('Sessions')
+                  setCreateSessionSignal((current) => current + 1)
+                }}
+                onStartTimer={() => {
+                  setActiveNav('Timer')
+                  setStartTimerSignal((current) => current + 1)
+                }}
+              />
 
               <select
                 className="h-9 rounded-md border border-input bg-background px-2.5 text-xs font-medium"
                 value={theme}
                 onChange={(event) => setTheme(event.target.value as ThemeName)}
               >
-                <option value="pink">Pink</option>
-                <option value="neutral">Neutral</option>
-                <option value="dark">Dark</option>
+                {themeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
 
-              <Badge className="hidden sm:inline-flex">Streak: 12 days</Badge>
-              <Button onClick={() => setActiveNav('Timer')}>Start Timer</Button>
+              <Badge variant={syncBadgeVariant} className="hidden sm:inline-flex">
+                {sync.isSyncing ? <RefreshCcw className="mr-1 h-3 w-3 animate-spin" /> : null}
+                {syncBadgeLabel}
+              </Badge>
+              <Button
+                onClick={() => {
+                  setActiveNav('Timer')
+                  setStartTimerSignal((current) => current + 1)
+                }}
+              >
+                Start Timer
+              </Button>
+              <Button variant="outline" size="icon" onClick={() => setShortcutsOpen(true)} aria-label="Show shortcuts">
+                ?
+              </Button>
             </div>
           </header>
 
           <main className="space-y-7 p-4 md:p-8">
-            {activeNav === 'Settings' ? <SettingsPage /> : null}
-            {activeNav === 'Sessions' ? <SessionsPage /> : null}
-            {activeNav === 'Timer' ? <TimerPage /> : null}
-            {activeNav === 'Courses' ? <CoursesPage /> : null}
-            {activeNav === 'Calendar' ? <CalendarPage /> : null}
-            {activeNav === 'Achievements' ? <AchievementsPage /> : null}
-            {activeNav === 'Insights' ? <InsightsPage /> : null}
-            {activeNav !== 'Settings' &&
-            activeNav !== 'Sessions' &&
-            activeNav !== 'Timer' &&
-            activeNav !== 'Courses' &&
-            activeNav !== 'Calendar' &&
-            activeNav !== 'Achievements' &&
-            activeNav !== 'Insights' ? (
-              <DashboardPage />
-            ) : null}
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeNav}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              >
+                {renderActivePage()}
+              </motion.div>
+            </AnimatePresence>
           </main>
         </div>
       </div>
+
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Keyboard Shortcuts</DialogTitle>
+            <DialogDescription>Use shortcuts to move faster across the app.</DialogDescription>
+          </DialogHeader>
+          <div className="mt-3 space-y-2 rounded-lg border border-border/70 bg-background/70 p-3 text-sm">
+            <p className="flex items-center justify-between"><span>Command palette</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Cmd/Ctrl + K</kbd></p>
+            <p className="flex items-center justify-between"><span>Start timer</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Shift + T</kbd></p>
+            <p className="flex items-center justify-between"><span>Log session</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Shift + L</kbd></p>
+            <p className="flex items-center justify-between"><span>Navigate pages</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">Alt + 1..9</kbd></p>
+            <p className="flex items-center justify-between"><span>Show this guide</span> <kbd className="rounded border px-1.5 py-0.5 text-xs">?</kbd></p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

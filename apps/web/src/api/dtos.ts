@@ -132,3 +132,113 @@ export type AchievementsResponseDto = {
   }
   achievements: AchievementItemDto[]
 }
+
+export type StreakHeatmapDayDto = {
+  date: string
+  actualMinutes: number
+  targetMinutes: number
+  metTarget: boolean
+  medal: 'none' | 'bronze' | 'silver' | 'gold'
+}
+
+export type StreakOverviewDto = {
+  currentStreak: number
+  longestStreak: number
+  missedDays: number
+  cutoffTime: string
+  updatedAt: string
+  heatmap: StreakHeatmapDayDto[]
+}
+
+export type ProductivityTrendDayDto = {
+  date: string
+  score: number
+  actualMinutes: number
+  targetMinutes: number
+  sessionsCount: number
+}
+
+export type ProductivityOverviewDto = {
+  todayScore: number
+  weeklyAverage: number
+  updatedAt: string
+  explanation: {
+    targetCompletion: number
+    consistency: number
+    sessionLength: number
+    breaks: number
+    summary: string
+  }
+  weeklyTrend: ProductivityTrendDayDto[]
+}
+
+export type PlannerBlockStatus = 'upcoming' | 'completed' | 'missed'
+
+export type PlannerBlockDto = {
+  id: string
+  courseId: string
+  activityId: string | null
+  startTime: string
+  endTime: string
+  note: string | null
+  createdAt: string
+  plannedMinutes: number
+  actualMinutes: number
+  status: PlannerBlockStatus
+  course: CourseDto | null
+  activity: ActivityDto | null
+}
+
+export type CreatePlannerBlockDto = {
+  courseId: string
+  activityId?: string | null
+  startTime: string
+  endTime: string
+  note?: string
+}
+
+export type UpdatePlannerBlockDto = CreatePlannerBlockDto
+
+export type PlannerOverviewDto = {
+  plannedMinutes: number
+  actualMinutes: number
+  missedSessions: number
+  varianceMinutes: number
+}
+
+export type DistractionType = 'phone' | 'social_media' | 'noise' | 'tiredness' | 'other'
+
+export type DistractionDto = {
+  id: string
+  sessionId: string
+  type: DistractionType
+  label: string
+  minutesLost: number
+  note: string | null
+  createdAt: string
+}
+
+export type CreateDistractionDto = {
+  type: DistractionType
+  minutesLost?: number
+  note?: string
+}
+
+export type DistractionAnalyticsDto = {
+  days: number
+  totalMinutesLost: number
+  totalEvents: number
+  mostCommon: {
+    type: DistractionType
+    label: string
+    count: number
+    minutesLost: number
+  } | null
+  byType: Array<{
+    type: DistractionType
+    label: string
+    count: number
+    minutesLost: number
+  }>
+  suggestions: string[]
+}

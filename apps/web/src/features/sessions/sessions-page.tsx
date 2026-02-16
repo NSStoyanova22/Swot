@@ -1,10 +1,17 @@
-import { type FormEvent, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Calendar, Clock3, ListChecks, NotebookPen, PlusCircle } from 'lucide-react'
+import { Calendar, Clock3, ListChecks, NotebookPen, PlusCircle, Search } from 'lucide-react'
 
+import { createSessionDistraction, getSessionDistractions } from '@/api/distractions'
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
-import type { ActivityDto, CourseDto, CreateSessionDto, SessionDto } from '@/api/dtos'
+import type {
+  ActivityDto,
+  CourseDto,
+  CreateDistractionDto,
+  CreateSessionDto,
+  SessionDto,
+} from '@/api/dtos'
 import { createSession, getSessions } from '@/api/sessions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,10 +26,12 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
+import { MarkdownPreview } from '@/components/ui/markdown-preview'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 
-const sessionsQueryKey = ['sessions'] as const
+const sessionsQueryBaseKey = ['sessions'] as const
 const coursesQueryKey = ['courses'] as const
 const activitiesQueryKey = ['activities'] as const
 
@@ -118,7 +127,15 @@ function buildOptimisticSession(
   }
 }
 
-function LogSessionDialog({ courses, activities }: { courses: CourseDto[]; activities: ActivityDto[] }) {
+function LogSessionDialog({
+  courses,
+  activities,
+  openSignal = 0,
+}: {
+  courses: CourseDto[]
+  activities: ActivityDto[]
+  openSignal?: number
+}) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -134,26 +151,37 @@ function LogSessionDialog({ courses, activities }: { courses: CourseDto[]; activ
 
   const canLogSession = courses.length > 0
 
+  useEffect(() => {
+    if (openSignal <= 0) return
+    setOpen(true)
+  }, [openSignal])
+
   const mutation = useMutation({
     mutationFn: createSession,
     onMutate: async (payload) => {
-      await queryClient.cancelQueries({ queryKey: sessionsQueryKey })
-
-      const previousSessions = queryClient.getQueryData<SessionDto[]>(sessionsQueryKey) ?? []
+      await queryClient.cancelQueries({ queryKey: sessionsQueryBaseKey })
+      const previousSessions = queryClient.getQueriesData<SessionDto[]>({
+        queryKey: sessionsQueryBaseKey,
+      })
       const optimisticSession = buildOptimisticSession(payload, courses, activities)
 
-      queryClient.setQueryData<SessionDto[]>(sessionsQueryKey, [optimisticSession, ...previousSessions])
+      queryClient.setQueriesData<SessionDto[]>(
+        { queryKey: sessionsQueryBaseKey },
+        (current = []) => [optimisticSession, ...current],
+      )
 
       return { previousSessions, optimisticId: optimisticSession.id }
     },
     onError: (_error, _payload, context) => {
       if (context?.previousSessions) {
-        queryClient.setQueryData(sessionsQueryKey, context.previousSessions)
+        context.previousSessions.forEach(([key, value]) => {
+          queryClient.setQueryData(key, value)
+        })
       }
       setError('Failed to save session. Please try again.')
     },
     onSuccess: (savedSession, _payload, context) => {
-      queryClient.setQueryData<SessionDto[]>(sessionsQueryKey, (current = []) =>
+      queryClient.setQueriesData<SessionDto[]>({ queryKey: sessionsQueryBaseKey }, (current = []) =>
         current.map((item) => (item.id === context?.optimisticId ? savedSession : item)),
       )
 
@@ -165,7 +193,11 @@ function LogSessionDialog({ courses, activities }: { courses: CourseDto[]; activ
       setError(null)
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
+      queryClient.invalidateQueries({ queryKey: sessionsQueryBaseKey })
+      queryClient.invalidateQueries({ queryKey: ['streak'] })
+      queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
     },
   })
 
@@ -326,14 +358,12 @@ function LogSessionDialog({ courses, activities }: { courses: CourseDto[]; activ
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Note</label>
-            <Textarea
-              placeholder="What did you work on?"
-              value={form.note}
-              onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
-            />
-          </div>
+          <MarkdownNoteEditor
+            label="Note (Markdown)"
+            value={form.note}
+            onChange={(value) => setForm((current) => ({ ...current, note: value }))}
+            placeholder="What did you work on? Use Markdown like **bold**, lists, or links."
+          />
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
@@ -376,10 +406,124 @@ function EmptyState({ hasCourses }: { hasCourses: boolean }) {
   )
 }
 
-export function SessionsPage() {
+function DistractionDialog({
+  session,
+  open,
+  onOpenChange,
+}: {
+  session: SessionDto | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [type, setType] = useState<CreateDistractionDto['type']>('phone')
+  const [minutesLost, setMinutesLost] = useState('3')
+  const [note, setNote] = useState('')
+
+  const distractionsQuery = useQuery({
+    queryKey: ['session-distractions', session?.id],
+    queryFn: ({ signal }) =>
+      session ? getSessionDistractions(session.id, signal) : Promise.resolve([]),
+    enabled: open && Boolean(session),
+  })
+
+  const mutation = useMutation({
+    mutationFn: (payload: CreateDistractionDto) => {
+      if (!session) throw new Error('No session selected')
+      return createSessionDistraction(session.id, payload)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['session-distractions', session?.id] })
+      queryClient.invalidateQueries({ queryKey: ['distractions-analytics'] })
+      setNote('')
+      setMinutesLost('3')
+    },
+  })
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Log Distraction</DialogTitle>
+          <DialogDescription>
+            Track interruptions for this session to improve focus analytics.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium">Type</span>
+              <select
+                value={type}
+                onChange={(event) => setType(event.target.value as CreateDistractionDto['type'])}
+                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 py-2 text-sm"
+              >
+                <option value="phone">Phone</option>
+                <option value="social_media">Social media</option>
+                <option value="noise">Noise</option>
+                <option value="tiredness">Tiredness</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-sm font-medium">Minutes lost</span>
+              <Input
+                type="number"
+                min={0}
+                value={minutesLost}
+                onChange={(event) => setMinutesLost(event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="space-y-1.5">
+            <span className="text-sm font-medium">Note</span>
+            <Textarea
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="Optional context"
+            />
+          </label>
+
+          <Button
+            onClick={() =>
+              mutation.mutate({
+                type,
+                minutesLost: Number(minutesLost || 0),
+                note: note.trim() || undefined,
+              })
+            }
+            disabled={mutation.isPending}
+          >
+            {mutation.isPending ? 'Saving...' : 'Save distraction'}
+          </Button>
+
+          <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+            <p className="text-sm font-medium">Recent distractions</p>
+            {distractionsQuery.data?.length ? (
+              distractionsQuery.data.map((item) => (
+                <div key={item.id} className="text-xs text-muted-foreground">
+                  {item.label} • {item.minutesLost}m {item.note ? `• ${item.note}` : ''}
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">No distractions logged yet for this session.</p>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function SessionsPage({ openCreateSignal = 0 }: { openCreateSignal?: number }) {
+  const [noteSearch, setNoteSearch] = useState('')
+  const [previewNotes, setPreviewNotes] = useState(false)
+  const noteQuery = noteSearch.trim()
+
   const sessionsQuery = useQuery({
-    queryKey: sessionsQueryKey,
-    queryFn: ({ signal }) => getSessions(signal),
+    queryKey: ['sessions', 'note-search', noteQuery],
+    queryFn: ({ signal }) => getSessions(noteQuery ? { q: noteQuery } : {}, signal),
   })
   const coursesQuery = useQuery({
     queryKey: coursesQueryKey,
@@ -396,6 +540,7 @@ export function SessionsPage() {
 
   const isLoading = sessionsQuery.isPending || coursesQuery.isPending || activitiesQuery.isPending
   const hasError = sessionsQuery.isError || coursesQuery.isError || activitiesQuery.isError
+  const [distractionSession, setDistractionSession] = useState<SessionDto | null>(null)
 
   return (
     <section className="space-y-5">
@@ -406,9 +551,21 @@ export function SessionsPage() {
             Review your study logs and add missed sessions with precision.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-72 max-w-full">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={noteSearch}
+              onChange={(event) => setNoteSearch(event.target.value)}
+              placeholder="Search notes..."
+              className="pl-8"
+            />
+          </div>
+          <Button variant={previewNotes ? 'outline' : 'ghost'} size="sm" onClick={() => setPreviewNotes((current) => !current)}>
+            {previewNotes ? 'Plain note view' : 'Preview notes'}
+          </Button>
           <Badge variant="outline">{sessions.length} total</Badge>
-          <LogSessionDialog courses={courses} activities={activities} />
+          <LogSessionDialog courses={courses} activities={activities} openSignal={openCreateSignal} />
         </div>
       </div>
 
@@ -428,7 +585,15 @@ export function SessionsPage() {
               Could not load sessions data. Check backend connectivity and try again.
             </p>
           ) : sessions.length === 0 ? (
-            <EmptyState hasCourses={courses.length > 0} />
+            noteQuery ? (
+              <Card className="border-dashed">
+                <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                  No sessions match note search <span className="font-medium">"{noteQuery}"</span>.
+                </CardContent>
+              </Card>
+            ) : (
+              <EmptyState hasCourses={courses.length > 0} />
+            )
           ) : (
             <div className="overflow-x-auto rounded-lg border border-border/70 bg-background/75">
               <Table>
@@ -451,6 +616,7 @@ export function SessionsPage() {
                     <TableHead>Course</TableHead>
                     <TableHead>Activity</TableHead>
                     <TableHead>Note</TableHead>
+                    <TableHead>Focus</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -474,8 +640,25 @@ export function SessionsPage() {
                           '-'
                         )}
                       </TableCell>
-                      <TableCell className="max-w-[240px] truncate text-muted-foreground">
-                        {session.note || '-'}
+                      <TableCell className="max-w-[280px] text-muted-foreground">
+                        {previewNotes ? (
+                          <MarkdownPreview
+                            value={session.note ?? ''}
+                            className="max-h-24 overflow-y-auto text-xs"
+                            emptyLabel="-"
+                          />
+                        ) : (
+                          <p className="truncate">{session.note || '-'}</p>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDistractionSession(session)}
+                        >
+                          Log distraction
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -485,6 +668,14 @@ export function SessionsPage() {
           )}
         </CardContent>
       </Card>
+
+      <DistractionDialog
+        session={distractionSession}
+        open={Boolean(distractionSession)}
+        onOpenChange={(open) => {
+          if (!open) setDistractionSession(null)
+        }}
+      />
     </section>
   )
 }

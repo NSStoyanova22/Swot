@@ -3,12 +3,20 @@ import cors from "@fastify/cors";
 import "dotenv/config";
 import { ensureAchievementsTable, recomputeAndStoreAchievements } from "./achievements.js";
 import { prisma } from "./db.js";
+import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
+import { ensurePlannerTables } from "./planner.js";
+import { ensureProductivityTables, getProductivityOverview, recomputeAndStoreProductivity } from "./productivity.js";
 import { routes } from "./routes.js";
+import { ensureStreakTables, getStreakOverview, recomputeAndStoreStreak } from "./streak.js";
 
 const app = Fastify({ logger: true });
 
 await app.register(cors, { origin: true });
 await ensureAchievementsTable();
+await ensureStreakTables();
+await ensureProductivityTables();
+await ensureDistractionTables();
+await ensurePlannerTables();
 
 app.get("/health", async () => ({ ok: true, name: "Swot API" }));
 
@@ -41,6 +49,20 @@ app.get("/me", async () => {
 
 app.get("/achievements", async () => {
   return recomputeAndStoreAchievements(USER_ID);
+});
+
+app.get("/streak", async () => {
+  return getStreakOverview(USER_ID);
+});
+
+app.get("/productivity", async () => {
+  return getProductivityOverview(USER_ID);
+});
+
+app.get("/distractions/analytics", async (req) => {
+  const query = req.query as { days?: string };
+  const days = query.days ? Number(query.days) : 30;
+  return getDistractionAnalytics(USER_ID, days);
 });
 
 app.get("/calendar.ics", async (_req, reply) => {
@@ -176,6 +198,8 @@ app.put("/me/preferences", async (req, reply) => {
   });
 
   await recomputeAndStoreAchievements(USER_ID);
+  await recomputeAndStoreStreak(USER_ID);
+  await recomputeAndStoreProductivity(USER_ID);
 
   return prisma.user.findUnique({
     where: { id: USER_ID },

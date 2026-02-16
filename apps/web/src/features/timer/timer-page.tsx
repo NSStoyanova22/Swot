@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Textarea } from '@/components/ui/textarea'
+import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
 import { cn } from '@/lib/utils'
 
 type PomodoroMode = 'focus' | 'short' | 'long'
@@ -114,6 +114,10 @@ function LogSessionModal({
     mutationFn: (payload: CreateSessionDto) => createSession(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      queryClient.invalidateQueries({ queryKey: ['streak'] })
+      queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
+      queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
       onOpenChange(false)
     },
     onError: () => {
@@ -199,10 +203,12 @@ function LogSessionModal({
             </div>
           </div>
 
-          <label className="space-y-1.5">
-            <span className="text-sm font-medium">Note</span>
-            <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="What did you work on?" />
-          </label>
+          <MarkdownNoteEditor
+            label="Note (Markdown)"
+            value={note}
+            onChange={setNote}
+            placeholder="What did you work on? Supports Markdown."
+          />
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
@@ -221,7 +227,7 @@ function LogSessionModal({
   )
 }
 
-export function TimerPage() {
+export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number }) {
   const meQuery = useQuery({
     queryKey: ['me'],
     queryFn: ({ signal }) => getMe(signal),
@@ -301,6 +307,12 @@ export function TimerPage() {
   const startPomodoro = () => {
     setPomodoroRunning(true)
   }
+
+  useEffect(() => {
+    if (startFocusSignal <= 0) return
+    setMode('focus')
+    setPomodoroRunning(true)
+  }, [startFocusSignal])
 
   const resetPomodoro = () => {
     setPomodoroRunning(false)

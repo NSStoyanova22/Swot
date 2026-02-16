@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  Palette,
+  RefreshCcw,
   Save,
   Settings2,
   TriangleAlert,
@@ -22,6 +24,8 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/toast'
 import { useHealthQuery } from '@/hooks/use-health-query'
+import { useSessionSync } from '@/hooks/use-session-sync'
+import { type ThemeName, useTheme } from '@/hooks/use-theme'
 
 const weekdayOrder: Array<{ day: string; weekday: number }> = [
   { day: 'Mon', weekday: 1 },
@@ -65,6 +69,8 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
 
 export function SettingsPage() {
   const { toast } = useToast()
+  const sync = useSessionSync()
+  const { theme, setTheme, options: themeOptions } = useTheme()
   const queryClient = useQueryClient()
   const meQuery = useQuery({
     queryKey: ['me'],
@@ -96,6 +102,8 @@ export function SettingsPage() {
     mutationFn: updatePreferences,
     onSuccess: (updated) => {
       queryClient.setQueryData(['me'], updated)
+      queryClient.invalidateQueries({ queryKey: ['streak'] })
+      queryClient.invalidateQueries({ queryKey: ['productivity'] })
       setForm(createFormFromMe(updated))
       toast({
         variant: 'success',
@@ -148,6 +156,12 @@ export function SettingsPage() {
 
     return { label: 'Online', tone: 'default' as const, icon: CheckCircle2 }
   }, [health.data?.ok, health.isError, health.isPending])
+
+  const syncLabel = sync.isSyncing
+    ? `Syncing ${sync.pendingCount} queued`
+    : sync.pendingCount > 0
+      ? `${sync.pendingCount} queued`
+      : 'Up to date'
 
   const applyPreset = () => {
     setForm((current) => ({
@@ -414,13 +428,41 @@ export function SettingsPage() {
               ) : null}
             </div>
           </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+            <div className="flex items-center gap-2">
+              <Palette className="h-4 w-4 text-primary" />
+              <p className="text-sm font-semibold">Theme Engine</p>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">Choose and preview themes. Selection is saved locally.</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {themeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`rounded-lg border p-3 text-left transition ${
+                    theme === option.value
+                      ? 'border-primary/60 bg-primary/10'
+                      : 'border-border/70 bg-background hover:border-primary/30'
+                  }`}
+                  onClick={() => setTheme(option.value as ThemeName)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{option.label}</p>
+                    {theme === option.value ? <Check className="h-4 w-4 text-primary" /> : null}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{option.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>API Status</CardTitle>
-          <CardDescription>Connection health for settings persistence.</CardDescription>
+          <CardDescription>Connection and sync health for settings persistence.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/80 p-3">
@@ -433,6 +475,17 @@ export function SettingsPage() {
           <p className="text-sm text-muted-foreground">
             API URL: <span className="font-medium text-foreground">{import.meta.env.VITE_API_URL}</span>
           </p>
+          <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/80 p-3">
+            <div className="flex items-center gap-2">
+              {sync.isSyncing ? <RefreshCcw className="h-4 w-4 animate-spin text-primary" /> : <Clock3 className="h-4 w-4 text-primary" />}
+              <p className="text-sm font-medium">Session Sync</p>
+            </div>
+            <Badge variant={sync.pendingCount > 0 ? 'secondary' : 'outline'}>{syncLabel}</Badge>
+          </div>
+          {sync.lastError ? <p className="text-xs text-muted-foreground">Last sync notice: {sync.lastError}</p> : null}
+          <Button variant="outline" onClick={() => sync.syncNow()} disabled={sync.isSyncing}>
+            {sync.isSyncing ? 'Syncing...' : 'Sync now'}
+          </Button>
           <Button variant="outline" onClick={() => health.refetch()} disabled={health.isFetching}>
             {health.isFetching ? 'Refreshing...' : 'Refresh status'}
           </Button>

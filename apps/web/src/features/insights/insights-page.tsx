@@ -127,7 +127,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 export function InsightsPage() {
   const sessionsQuery = useQuery({
     queryKey: ['sessions'],
-    queryFn: ({ signal }) => getSessions(signal),
+    queryFn: ({ signal }) => getSessions({}, signal),
   })
 
   const sessions = sessionsQuery.data ?? []

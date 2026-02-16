@@ -1,14 +1,21 @@
-import { type ComponentType, type ReactNode, useMemo, useState } from 'react'
+import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Award,
   CalendarDays,
   Flame,
   Goal,
+  GripVertical,
+  LayoutGrid,
   Medal,
+  Plus,
+  Save,
   Timer,
+  X,
 } from 'lucide-react'
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -23,17 +30,93 @@ import {
 } from 'recharts'
 
 import { getActivities } from '@/api/activities'
+import { getDistractionAnalytics } from '@/api/distractions'
 import { getMe } from '@/api/me'
+import { getProductivityOverview } from '@/api/productivity'
 import { getSessions } from '@/api/sessions'
+import { getStreakOverview } from '@/api/streak'
 import type { SessionDto } from '@/api/dtos'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 const sessionsQueryKey = ['sessions'] as const
 const meQueryKey = ['me'] as const
 
 const schoolLabels = ['School Year 2025/26 - Grade 10', 'School Year 2025/26 - Grade 11', 'School Year 2025/26 - Grade 12']
 const fallbackCourseColors = ['#e11d77', '#fb7185', '#f43f5e', '#fda4af', '#ec4899', '#be185d']
+const dashboardOrderStorageKey = 'swot-dashboard-widget-order-v1'
+const dashboardEnabledStorageKey = 'swot-dashboard-widget-enabled-v1'
+
+type WidgetId =
+  | 'today'
+  | 'week'
+  | 'month'
+  | 'streak'
+  | 'productivity'
+  | 'medals'
+  | 'focusInsights'
+  | 'heatmap'
+  | 'trend'
+  | 'courseChart'
+  | 'timeAnalysis'
+
+const defaultWidgetOrder: WidgetId[] = [
+  'today',
+  'week',
+  'month',
+  'streak',
+  'productivity',
+  'medals',
+  'focusInsights',
+  'heatmap',
+  'trend',
+  'courseChart',
+  'timeAnalysis',
+]
+
+const defaultWidgetEnabled: Record<WidgetId, boolean> = {
+  today: true,
+  week: true,
+  month: true,
+  streak: true,
+  productivity: true,
+  medals: true,
+  focusInsights: true,
+  heatmap: true,
+  trend: true,
+  courseChart: true,
+  timeAnalysis: true,
+}
+
+const widgetLabel: Record<WidgetId, string> = {
+  today: 'Today Minutes',
+  week: 'Week Minutes',
+  month: 'Month Minutes',
+  streak: 'Streak',
+  productivity: 'Productivity',
+  medals: 'Medals',
+  focusInsights: 'Focus Insights',
+  heatmap: 'Study Heatmap',
+  trend: 'Weekly Productivity Trend',
+  courseChart: 'Minutes by Course',
+  timeAnalysis: 'Time Analysis',
+}
+
+const widgetSpanClass: Record<WidgetId, string> = {
+  today: 'md:col-span-1 xl:col-span-1',
+  week: 'md:col-span-1 xl:col-span-1',
+  month: 'md:col-span-1 xl:col-span-1',
+  streak: 'md:col-span-1 xl:col-span-1',
+  productivity: 'md:col-span-1 xl:col-span-1',
+  medals: 'md:col-span-1 xl:col-span-1',
+  focusInsights: 'md:col-span-2 xl:col-span-3',
+  heatmap: 'md:col-span-2 xl:col-span-6',
+  trend: 'md:col-span-2 xl:col-span-3',
+  courseChart: 'md:col-span-2 xl:col-span-3',
+  timeAnalysis: 'md:col-span-2 xl:col-span-3',
+}
 
 function startOfDay(date: Date) {
   const value = new Date(date)
@@ -78,6 +161,25 @@ function dateKey(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function startOfWeekMonday(date: Date) {
+  const dayIndex = (date.getDay() + 6) % 7
+  return addDays(date, -dayIndex)
+}
+
+function endOfWeekSunday(date: Date) {
+  const dayIndex = (date.getDay() + 6) % 7
+  return addDays(date, 6 - dayIndex)
+}
+
+function heatmapCellClass(minutes: number) {
+  if (minutes >= 180) return 'bg-primary'
+  if (minutes >= 120) return 'bg-primary/85'
+  if (minutes >= 60) return 'bg-primary/70'
+  if (minutes >= 30) return 'bg-primary/50'
+  if (minutes > 0) return 'bg-primary/30'
+  return 'bg-muted/60'
 }
 
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ name?: string; value?: number; payload?: { minutes?: number } }>; label?: string }) {
@@ -127,10 +229,46 @@ function Tile({
 
 export function DashboardPage() {
   const [schoolLabel, setSchoolLabel] = useState(schoolLabels[1])
+  const [heatmapCourseId, setHeatmapCourseId] = useState('all')
+  const [heatmapYear, setHeatmapYear] = useState(new Date().getFullYear())
+  const [customizeMode, setCustomizeMode] = useState(false)
+  const [draggingWidget, setDraggingWidget] = useState<WidgetId | null>(null)
+  const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>(defaultWidgetOrder)
+  const [widgetEnabled, setWidgetEnabled] = useState<Record<WidgetId, boolean>>(defaultWidgetEnabled)
+  const [layoutDirty, setLayoutDirty] = useState(false)
+
+  useEffect(() => {
+    try {
+      const storedOrderRaw = window.localStorage.getItem(dashboardOrderStorageKey)
+      const storedEnabledRaw = window.localStorage.getItem(dashboardEnabledStorageKey)
+
+      if (storedOrderRaw) {
+        const parsed = JSON.parse(storedOrderRaw) as unknown
+        if (Array.isArray(parsed)) {
+          const valid = parsed.filter((item): item is WidgetId =>
+            defaultWidgetOrder.includes(item as WidgetId),
+          )
+          const missing = defaultWidgetOrder.filter((item) => !valid.includes(item))
+          setWidgetOrder([...valid, ...missing])
+        }
+      }
+
+      if (storedEnabledRaw) {
+        const parsed = JSON.parse(storedEnabledRaw) as Partial<Record<WidgetId, boolean>>
+        setWidgetEnabled({
+          ...defaultWidgetEnabled,
+          ...parsed,
+        })
+      }
+    } catch {
+      setWidgetOrder(defaultWidgetOrder)
+      setWidgetEnabled(defaultWidgetEnabled)
+    }
+  }, [])
 
   const sessionsQuery = useQuery({
     queryKey: sessionsQueryKey,
-    queryFn: ({ signal }) => getSessions(signal),
+    queryFn: ({ signal }) => getSessions({}, signal),
   })
   const meQuery = useQuery({
     queryKey: meQueryKey,
@@ -139,6 +277,18 @@ export function DashboardPage() {
   const activitiesQuery = useQuery({
     queryKey: ['activities'],
     queryFn: ({ signal }) => getActivities(signal),
+  })
+  const streakQuery = useQuery({
+    queryKey: ['streak'],
+    queryFn: ({ signal }) => getStreakOverview(signal),
+  })
+  const productivityQuery = useQuery({
+    queryKey: ['productivity'],
+    queryFn: ({ signal }) => getProductivityOverview(signal),
+  })
+  const distractionQuery = useQuery({
+    queryKey: ['distractions-analytics'],
+    queryFn: ({ signal }) => getDistractionAnalytics(30, signal),
   })
 
   const now = new Date()
@@ -189,16 +339,6 @@ export function DashboardPage() {
       byWeekday[dayIndex] += session.durationMinutes
     })
 
-    let streak = 0
-    for (let cursor = todayStart; ; cursor = addDays(cursor, -1)) {
-      const key = dateKey(cursor)
-      if ((byDay.get(key) ?? 0) > 0) {
-        streak += 1
-      } else {
-        break
-      }
-    }
-
     let bronze = 0
     let silver = 0
     let gold = 0
@@ -228,7 +368,6 @@ export function DashboardPage() {
       todayMinutes,
       weekMinutes,
       monthMinutes,
-      streak,
       medals: { bronze, silver, gold },
       courseChart,
       weekChart,
@@ -240,6 +379,431 @@ export function DashboardPage() {
   const todayProgress = Math.min(100, Math.round((metrics.todayMinutes / Math.max(todayTarget, 1)) * 100))
 
   const hasData = sessions.length > 0
+  const streak = streakQuery.data
+  const courseOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    sessions.forEach((session) => {
+      if (!map.has(session.courseId)) {
+        map.set(session.courseId, session.course?.name ?? 'Unknown')
+      }
+    })
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }))
+  }, [sessions])
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>()
+    sessions.forEach((session) => years.add(new Date(session.startTime).getFullYear()))
+    years.add(new Date().getFullYear())
+    return Array.from(years).sort((a, b) => b - a)
+  }, [sessions])
+
+  const heatmap = useMemo(() => {
+    const filtered = heatmapCourseId === 'all'
+      ? sessions
+      : sessions.filter((session) => session.courseId === heatmapCourseId)
+
+    const start = startOfWeekMonday(new Date(heatmapYear, 0, 1))
+    const end = endOfWeekSunday(new Date(heatmapYear, 11, 31))
+
+    const dayMap = new Map<string, { minutes: number; sessions: number }>()
+    filtered.forEach((session) => {
+      const day = startOfDay(new Date(session.startTime))
+      if (day.getFullYear() !== heatmapYear) return
+      const key = dateKey(day)
+      const current = dayMap.get(key) ?? { minutes: 0, sessions: 0 }
+      dayMap.set(key, {
+        minutes: current.minutes + session.durationMinutes,
+        sessions: current.sessions + 1,
+      })
+    })
+
+    const weeks: Array<Array<{ date: Date; inYear: boolean; minutes: number; sessions: number }>> = []
+    const monthLabels: Array<{ month: string; column: number }> = []
+    let column = 0
+
+    for (let cursor = new Date(start); cursor.getTime() <= end.getTime(); cursor = addDays(cursor, 7)) {
+      const weekDays: Array<{ date: Date; inYear: boolean; minutes: number; sessions: number }> = []
+      for (let i = 0; i < 7; i += 1) {
+        const day = addDays(cursor, i)
+        const key = dateKey(day)
+        const value = dayMap.get(key) ?? { minutes: 0, sessions: 0 }
+        weekDays.push({
+          date: day,
+          inYear: day.getFullYear() === heatmapYear,
+          minutes: value.minutes,
+          sessions: value.sessions,
+        })
+      }
+      if (weekDays.some((day) => day.date.getDate() === 1 && day.inYear)) {
+        const labelDay = weekDays.find((day) => day.date.getDate() === 1 && day.inYear)
+        if (labelDay) {
+          monthLabels.push({
+            month: labelDay.date.toLocaleDateString(undefined, { month: 'short' }),
+            column,
+          })
+        }
+      }
+      weeks.push(weekDays)
+      column += 1
+    }
+
+    return { weeks, monthLabels }
+  }, [heatmapCourseId, heatmapYear, sessions])
+
+  const visibleWidgets = useMemo(
+    () => widgetOrder.filter((widget) => widgetEnabled[widget]),
+    [widgetEnabled, widgetOrder],
+  )
+  const hiddenWidgets = useMemo(
+    () => defaultWidgetOrder.filter((widget) => !widgetEnabled[widget]),
+    [widgetEnabled],
+  )
+
+  const saveLayout = () => {
+    window.localStorage.setItem(dashboardOrderStorageKey, JSON.stringify(widgetOrder))
+    window.localStorage.setItem(dashboardEnabledStorageKey, JSON.stringify(widgetEnabled))
+    setLayoutDirty(false)
+    setCustomizeMode(false)
+  }
+
+  const resetLayout = () => {
+    setWidgetOrder(defaultWidgetOrder)
+    setWidgetEnabled(defaultWidgetEnabled)
+    setLayoutDirty(true)
+  }
+
+  const moveWidget = (source: WidgetId, target: WidgetId) => {
+    if (source === target) return
+    setWidgetOrder((current) => {
+      const sourceIndex = current.indexOf(source)
+      const targetIndex = current.indexOf(target)
+      if (sourceIndex === -1 || targetIndex === -1) return current
+      const next = [...current]
+      next.splice(sourceIndex, 1)
+      next.splice(targetIndex, 0, source)
+      return next
+    })
+    setLayoutDirty(true)
+  }
+
+  const addWidget = (widget: WidgetId) => {
+    setWidgetEnabled((current) => ({ ...current, [widget]: true }))
+    setLayoutDirty(true)
+  }
+
+  const removeWidget = (widget: WidgetId) => {
+    const enabledCount = visibleWidgets.length
+    if (enabledCount <= 1) return
+    setWidgetEnabled((current) => ({ ...current, [widget]: false }))
+    setLayoutDirty(true)
+  }
+
+  const widgetContent: Record<WidgetId, ReactNode> = {
+    today: (
+      <Tile
+        title="Today Minutes"
+        value={formatMinutes(metrics.todayMinutes)}
+        description={`Target: ${formatMinutes(todayTarget)}`}
+        icon={Timer}
+        extra={
+          <div className="space-y-1">
+            <div className="h-2 rounded-full bg-secondary">
+              <div
+                className="h-2 rounded-full bg-primary transition-all"
+                style={{ width: `${todayProgress}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">{todayProgress}% of daily target</p>
+          </div>
+        }
+      />
+    ),
+    week: (
+      <Tile title="Week Minutes" value={formatMinutes(metrics.weekMinutes)} description="Monday to today" icon={CalendarDays} />
+    ),
+    month: (
+      <Tile title="Month Minutes" value={formatMinutes(metrics.monthMinutes)} description="Current month total" icon={Goal} />
+    ),
+    streak: (
+      <Tile
+        title="Streak"
+        value={`${streak?.currentStreak ?? 0} day${(streak?.currentStreak ?? 0) === 1 ? '' : 's'}`}
+        description={`Longest: ${streak?.longestStreak ?? 0} • Missed: ${streak?.missedDays ?? 0}`}
+        icon={Flame}
+      />
+    ),
+    productivity: (
+      <Tile
+        title="Productivity"
+        value={`${productivityQuery.data?.todayScore ?? 0}/100`}
+        description={`Weekly avg: ${Math.round(productivityQuery.data?.weeklyAverage ?? 0)}`}
+        icon={Goal}
+        extra={
+          <div className="space-y-1">
+            <div className="h-2 rounded-full bg-secondary">
+              <div
+                className="h-2 rounded-full bg-primary transition-all"
+                style={{ width: `${productivityQuery.data?.todayScore ?? 0}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {productivityQuery.data?.explanation.summary ?? 'Productivity score updates from your sessions.'}
+            </p>
+          </div>
+        }
+      />
+    ),
+    medals: (
+      <Tile
+        title="Medals"
+        value={`${metrics.medals.gold + metrics.medals.silver + metrics.medals.bronze}`}
+        description="Daily performance awards"
+        icon={Award}
+        extra={
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-700">
+              <Medal className="h-3.5 w-3.5" /> G {metrics.medals.gold}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-1 text-zinc-700">
+              <Medal className="h-3.5 w-3.5" /> S {metrics.medals.silver}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-1 text-orange-700">
+              <Medal className="h-3.5 w-3.5" /> B {metrics.medals.bronze}
+            </span>
+          </div>
+        }
+      />
+    ),
+    focusInsights: (
+      <Card className="shadow-soft">
+        <CardHeader>
+          <CardTitle>Focus Insights</CardTitle>
+          <CardDescription>
+            Distractions in the last {distractionQuery.data?.days ?? 30} days.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap gap-2 text-sm">
+            <Badge variant="outline">
+              Most common: {distractionQuery.data?.mostCommon?.label ?? 'No data'}
+            </Badge>
+            <Badge variant="outline">
+              Time lost: {distractionQuery.data?.totalMinutesLost ?? 0}m
+            </Badge>
+            <Badge variant="outline">
+              Events: {distractionQuery.data?.totalEvents ?? 0}
+            </Badge>
+          </div>
+          <div className="space-y-1">
+            {(distractionQuery.data?.suggestions ?? ['Log distractions to unlock suggestions.']).map(
+              (suggestion) => (
+                <p key={suggestion} className="text-sm text-muted-foreground">
+                  • {suggestion}
+                </p>
+              ),
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    ),
+    heatmap: (
+      <Card className="shadow-soft">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle>Study Heatmap</CardTitle>
+              <CardDescription>
+                GitHub-style year view. Hover cells for minutes and sessions.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-xs font-medium"
+                value={heatmapCourseId}
+                onChange={(event) => setHeatmapCourseId(event.target.value)}
+              >
+                <option value="all">All courses</option>
+                {courseOptions.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2.5 text-xs font-medium"
+                value={String(heatmapYear)}
+                onChange={(event) => setHeatmapYear(Number(event.target.value))}
+              >
+                {availableYears.map((year) => (
+                  <option key={year} value={String(year)}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto rounded-xl border border-border/60 bg-gradient-to-br from-primary/10 via-card to-secondary/40 p-4">
+          {heatmap.weeks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No study data yet.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="relative min-w-[860px]">
+                <div className="mb-2 grid grid-cols-12 gap-2 text-[11px] text-muted-foreground">
+                  {heatmap.monthLabels.map((label) => (
+                    <span key={`${label.month}-${label.column}`} style={{ gridColumn: `${Math.min(12, Math.floor((label.column / Math.max(1, heatmap.weeks.length)) * 12) + 1)}` }}>
+                      {label.month}
+                    </span>
+                  ))}
+                </div>
+                <div className="grid grid-flow-col auto-cols-max gap-1">
+                  {heatmap.weeks.map((week, weekIndex) => (
+                    <div key={weekIndex} className="grid grid-rows-7 gap-1">
+                    {week.map((day, dayIndex) => (
+                      <div
+                        key={`${weekIndex}-${dayIndex}`}
+                        title={`${day.date.toLocaleDateString()}: ${day.minutes} min, ${day.sessions} session${day.sessions === 1 ? '' : 's'}`}
+                        className={cn(
+                          'heatmap-cell h-3.5 w-3.5 rounded-[3px] transition-all hover:scale-125 hover:ring-1 hover:ring-ring/60',
+                          day.inYear ? heatmapCellClass(day.minutes) : 'bg-transparent',
+                        )}
+                        style={{ animationDelay: `${(weekIndex * 7 + dayIndex) * 3}ms` }}
+                      />
+                    ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-muted/60" /> 0 min</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-primary/30" /> 1-29</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-primary/50" /> 30-59</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-primary/70" /> 60-119</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-primary/85" /> 120-179</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-primary" /> 180+</span>
+                <Badge variant="outline">Cutoff: {streak?.cutoffTime ?? '05:00'}</Badge>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    ),
+    trend: (
+      <Card className="shadow-soft">
+        <CardHeader>
+          <CardTitle>Weekly Productivity Trend</CardTitle>
+          <CardDescription>
+            Score drivers: target {productivityQuery.data?.explanation.targetCompletion ?? 0}, consistency{' '}
+            {productivityQuery.data?.explanation.consistency ?? 0}, session length{' '}
+            {productivityQuery.data?.explanation.sessionLength ?? 0}, breaks{' '}
+            {productivityQuery.data?.explanation.breaks ?? 0}.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="h-[220px]">
+          {productivityQuery.data?.weeklyTrend.length ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={productivityQuery.data.weeklyTrend}>
+                <defs>
+                  <linearGradient id="productivityFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#ec4899" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="#ec4899" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <XAxis
+                  dataKey="date"
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(value) => value.slice(5)}
+                />
+                <YAxis domain={[0, 100]} tickLine={false} axisLine={false} width={40} />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null
+                    const row = payload[0]?.payload as
+                      | {
+                          score: number
+                          actualMinutes: number
+                          sessionsCount: number
+                        }
+                      | undefined
+                    if (!row) return null
+                    return (
+                      <div className="rounded-lg border border-border/80 bg-card px-3 py-2 text-xs shadow-lg">
+                        <p className="font-semibold text-foreground">{label}</p>
+                        <p className="text-muted-foreground">Score: {row.score}/100</p>
+                        <p className="text-muted-foreground">
+                          {row.actualMinutes}m • {row.sessionsCount} session{row.sessionsCount === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                    )
+                  }}
+                />
+                <Area type="monotone" dataKey="score" stroke="#e11d77" fill="url(#productivityFill)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-sm text-muted-foreground">No productivity trend yet.</p>
+          )}
+        </CardContent>
+      </Card>
+    ),
+    courseChart: (
+      <Card className="shadow-soft">
+        <CardHeader>
+          <CardTitle>Minutes by Course</CardTitle>
+          <CardDescription>Distribution of focused time across your subjects.</CardDescription>
+        </CardHeader>
+        <CardContent className="h-[320px]">
+          {!hasData ? (
+            <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to visualize.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={metrics.courseChart}
+                  dataKey="minutes"
+                  nameKey="course"
+                  innerRadius={60}
+                  outerRadius={100}
+                  paddingAngle={3}
+                >
+                  {metrics.courseChart.map((entry) => (
+                    <Cell key={entry.courseId} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip content={<ChartTooltip />} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+    ),
+    timeAnalysis: (
+      <Card className="shadow-soft">
+        <CardHeader>
+          <CardTitle>Time Analysis</CardTitle>
+          <CardDescription>Minutes by day of week based on your logged sessions.</CardDescription>
+        </CardHeader>
+        <CardContent className="h-[320px]">
+          {!hasData ? (
+            <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to analyze.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={metrics.weekChart} barCategoryGap={18}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
+                <XAxis dataKey="day" tickLine={false} axisLine={false} />
+                <YAxis tickFormatter={(value) => `${value}m`} tickLine={false} axisLine={false} width={46} />
+                <Tooltip content={<ChartTooltip />} />
+                <Bar dataKey="minutes" fill="#e11d77" radius={[8, 8, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+    ),
+  }
 
   return (
     <section className="space-y-6">
@@ -270,111 +834,96 @@ export function DashboardPage() {
         </select>
       </div>
 
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <Tile
-          title="Today Minutes"
-          value={formatMinutes(metrics.todayMinutes)}
-          description={`Target: ${formatMinutes(todayTarget)}`}
-          icon={Timer}
-          extra={
-            <div className="space-y-1">
-              <div className="h-2 rounded-full bg-secondary">
-                <div
-                  className="h-2 rounded-full bg-primary transition-all"
-                  style={{ width: `${todayProgress}%` }}
-                />
+      <Card className="shadow-soft">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <LayoutGrid className="h-4 w-4 text-primary" />
+                Dashboard Layout
+              </CardTitle>
+              <CardDescription>Drag widgets, hide or add them, then save your layout.</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant={customizeMode ? 'secondary' : 'outline'} onClick={() => setCustomizeMode((current) => !current)}>
+                {customizeMode ? 'Done editing' : 'Customize'}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={resetLayout}
+                disabled={!layoutDirty && JSON.stringify(widgetOrder) === JSON.stringify(defaultWidgetOrder)}
+              >
+                Reset
+              </Button>
+              <Button onClick={saveLayout} disabled={!layoutDirty}>
+                <Save className="h-4 w-4" />
+                Save layout
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        {customizeMode ? (
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">Tip: drag widgets by dropping one card onto another card.</p>
+            {hiddenWidgets.length === 0 ? (
+              <p className="text-sm text-muted-foreground">All widgets are visible.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {hiddenWidgets.map((widget) => (
+                  <Button key={widget} variant="outline" size="sm" onClick={() => addWidget(widget)}>
+                    <Plus className="h-3.5 w-3.5" />
+                    {widgetLabel[widget]}
+                  </Button>
+                ))}
               </div>
-              <p className="text-xs text-muted-foreground">{todayProgress}% of daily target</p>
-            </div>
-          }
-        />
-        <Tile
-          title="Week Minutes"
-          value={formatMinutes(metrics.weekMinutes)}
-          description="Monday to today"
-          icon={CalendarDays}
-        />
-        <Tile
-          title="Month Minutes"
-          value={formatMinutes(metrics.monthMinutes)}
-          description="Current month total"
-          icon={Goal}
-        />
-        <Tile title="Streak" value={`${metrics.streak} day${metrics.streak === 1 ? '' : 's'}`} description="Consecutive active days" icon={Flame} />
-        <Tile
-          title="Medals"
-          value={`${metrics.medals.gold + metrics.medals.silver + metrics.medals.bronze}`}
-          description="Daily performance awards"
-          icon={Award}
-          extra={
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-amber-700">
-                <Medal className="h-3.5 w-3.5" /> G {metrics.medals.gold}
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-zinc-200 px-2 py-1 text-zinc-700">
-                <Medal className="h-3.5 w-3.5" /> S {metrics.medals.silver}
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-1 text-orange-700">
-                <Medal className="h-3.5 w-3.5" /> B {metrics.medals.bronze}
-              </span>
-            </div>
-          }
-        />
-      </section>
-
-      <section className="grid gap-4 lg:grid-cols-2">
-        <Card className="shadow-soft">
-          <CardHeader>
-            <CardTitle>Minutes by Course</CardTitle>
-            <CardDescription>Distribution of focused time across your subjects.</CardDescription>
-          </CardHeader>
-          <CardContent className="h-[320px]">
-            {!hasData ? (
-              <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to visualize.</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={metrics.courseChart}
-                    dataKey="minutes"
-                    nameKey="course"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={3}
-                  >
-                    {metrics.courseChart.map((entry) => (
-                      <Cell key={entry.courseId} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<ChartTooltip />} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
             )}
           </CardContent>
-        </Card>
+        ) : null}
+      </Card>
 
-        <Card className="shadow-soft">
-          <CardHeader>
-            <CardTitle>Time Analysis</CardTitle>
-            <CardDescription>Minutes by day of week based on your logged sessions.</CardDescription>
-          </CardHeader>
-          <CardContent className="h-[320px]">
-            {!hasData ? (
-              <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to analyze.</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={metrics.weekChart} barCategoryGap={18}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f5d4df" />
-                  <XAxis dataKey="day" tickLine={false} axisLine={false} />
-                  <YAxis tickFormatter={(value) => `${value}m`} tickLine={false} axisLine={false} width={46} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Bar dataKey="minutes" fill="#e11d77" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        {visibleWidgets.map((widget) => (
+          <div
+            key={widget}
+            className={cn(
+              'relative',
+              widgetSpanClass[widget],
+              customizeMode && 'rounded-xl ring-1 ring-dashed ring-primary/35',
             )}
-          </CardContent>
-        </Card>
+            draggable={customizeMode}
+            onDragStart={() => setDraggingWidget(widget)}
+            onDragOver={(event) => {
+              if (customizeMode) event.preventDefault()
+            }}
+            onDrop={() => {
+              if (customizeMode && draggingWidget) {
+                moveWidget(draggingWidget, widget)
+                setDraggingWidget(null)
+              }
+            }}
+            onDragEnd={() => setDraggingWidget(null)}
+          >
+            {customizeMode ? (
+              <div className="absolute right-2 top-2 z-20 flex items-center gap-1">
+                <Badge variant="secondary" className="gap-1 text-[10px]">
+                  <GripVertical className="h-3 w-3" />
+                  Drag
+                </Badge>
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  className="h-6 w-6"
+                  onClick={() => removeWidget(widget)}
+                  disabled={visibleWidgets.length <= 1}
+                  aria-label={`Remove ${widgetLabel[widget]}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : null}
+            {widgetContent[widget]}
+          </div>
+        ))}
       </section>
     </section>
   )
