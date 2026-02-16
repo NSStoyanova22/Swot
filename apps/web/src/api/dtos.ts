@@ -165,8 +165,11 @@ export type GradeItemDto = {
   gradeValue: number
   performanceScore: number
   weight: number
+  isFinal?: boolean
+  finalType?: 'TERM1' | 'TERM2' | 'YEAR' | null
   gradedOn: string
   note: string | null
+  importMetadata?: Record<string, unknown> | null
   createdAt: string
   updatedAt: string
   term?: {
@@ -194,8 +197,11 @@ export type CreateGradeItemDto = {
   scale: GradeScale
   gradeValue: number
   weight?: number
+  isFinal?: boolean
+  finalType?: 'TERM1' | 'TERM2' | 'YEAR' | null
   gradedOn: string
   note?: string
+  importMetadata?: Record<string, unknown> | null
 }
 
 export type UpdateGradeItemDto = Partial<CreateGradeItemDto> & {
@@ -212,6 +218,9 @@ export type BulkGradeImportDto = {
     gradeValue: number
     weight?: number
     note?: string
+    isFinal?: boolean
+    finalType?: 'TERM1' | 'TERM2' | 'YEAR' | null
+    importMetadata?: Record<string, unknown> | null
   }>
 }
 
@@ -270,6 +279,36 @@ export type OcrTextResponseDto = {
   fileName: string
   mimeType: string
   text: string
+}
+
+export type ShkoloRowDto = {
+  extractedSubject: string
+  currentGrades: number[]
+  term1: number | null
+  term2: number | null
+}
+
+export type ShkoloPdfImportResultDto = {
+  fileName: string
+  detectedYear: string | null
+  rows: ShkoloRowDto[]
+  skippedLines: number
+  debug?: {
+    rawSamples: string[]
+    usedOcrFallback: boolean
+    scannedThreshold: number
+    totalExtractedLength: number
+    extractedPageTextLengths: Array<{
+      page: number
+      length: number
+    }>
+    ocrPageTextLengths: Array<{
+      page: number
+      general: number
+      digits: number
+      total: number
+    }>
+  }
 }
 
 export type GradeCourseSummaryDto = {

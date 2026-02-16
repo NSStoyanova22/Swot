@@ -2,10 +2,10 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BarChart3, Calculator, CalendarPlus2, GraduationCap, Plus, Trash2 } from 'lucide-react'
 
-import { getCourses } from '@/api/courses'
+import { createCourse, getCourses } from '@/api/courses'
 import { autoAddPlannerBlocks, deletePlannerBlock } from '@/api/planner'
 import { createOrganizationTask } from '@/api/organization'
-import { bulkImportGrades, createGrade, createGradeCategory, createTerm, deleteGrade, deleteGradeCategory, deleteTerm, extractTextFromImage, getAcademicRisk, getGradeCategories, getGradeTargets, getGrades, getGradesSummary, getGradesWhatIf, getStudyRecommendations, getTerms, updateGradeCategory, upsertGradeTarget } from '@/api/grades'
+import { bulkImportGrades, createGrade, createGradeCategory, createTerm, deleteGrade, deleteGradeCategory, deleteTerm, extractTextFromImage, getAcademicRisk, getGradeCategories, getGradeTargets, getGrades, getGradesSummary, getGradesWhatIf, getStudyRecommendations, getTerms, importShkoloPdf, updateGradeCategory, upsertGradeTarget } from '@/api/grades'
 import type { GradeCategoryDto, GradeItemDto, GradeScale } from '@/api/dtos'
 import { PageContainer, PageHeader } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
@@ -56,6 +56,20 @@ function averageForCategory(items: GradeItemDto[], dropLowest: boolean) {
   return effective.reduce((sum, item) => sum + item.performanceScore * item.weight, 0) / totalWeight
 }
 
+function parseOptionalNumber(value: string) {
+  const normalized = value.trim().replace(',', '.')
+  if (!normalized) return null
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function parseGradeListText(value: string) {
+  return value
+    .split(/[,\s;]+/)
+    .map((item) => parseOptionalNumber(item))
+    .filter((item): item is number => item != null)
+}
+
 export function GradesPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -102,11 +116,61 @@ export function GradesPage() {
     rawText: '',
     gradedOn: new Date().toISOString().slice(0, 10),
   })
+  const [importMode, setImportMode] = useState<'text' | 'shkolo-pdf'>('text')
   const [photoImportForm, setPhotoImportForm] = useState({
     scale: 'bulgarian' as GradeScale,
     gradedOn: new Date().toISOString().slice(0, 10),
     file: null as File | null,
   })
+  const [shkoloForm, setShkoloForm] = useState({
+    scale: 'bulgarian' as GradeScale,
+    gradedOn: new Date().toISOString().slice(0, 10),
+    file: null as File | null,
+    targetTermId: '',
+    termGradeSource: 'term1' as 'term1' | 'term2',
+    includeCurrentGrades: true,
+  })
+  const [showShkoloDebug, setShowShkoloDebug] = useState(false)
+  const [shkoloMeta, setShkoloMeta] = useState<{
+    fileName: string
+    detectedYear: string | null
+    subjectsFound: number
+    parsedRows: number
+    currentGradesCount: number
+    termGradesFoundCount: number
+    skippedLines: number
+    debug?: {
+      rawSamples: string[]
+      usedOcrFallback: boolean
+      scannedThreshold: number
+      totalExtractedLength: number
+      extractedPageTextLengths: Array<{
+        page: number
+        length: number
+      }>
+      ocrPageTextLengths: Array<{
+        page: number
+        general: number
+        digits: number
+        total: number
+      }>
+    }
+  } | null>(null)
+  const [shkoloPreviewRows, setShkoloPreviewRows] = useState<Array<{
+    key: string
+    subjectName: string
+    courseId: string
+    matchedCourseName: string
+    matchScore: number
+    term1Final: string
+    term2Final: string
+    yearFinal: string
+    term1Current: string
+    term2Current: string
+  }>>([])
+  const [shkoloCreateCourseRowKey, setShkoloCreateCourseRowKey] = useState<string | null>(null)
+  const [shkoloCreateCourseName, setShkoloCreateCourseName] = useState('')
+  const [shkoloRemovedRowsCount, setShkoloRemovedRowsCount] = useState(0)
   const [photoPreviewRows, setPhotoPreviewRows] = useState<Array<{
     key: string
     extractedCourseName: string
@@ -122,6 +186,42 @@ export function GradesPage() {
     parsedRows: number
     unparsedRows: number
   } | null>(null)
+
+  const openShkoloCreateCourseDialog = (rowKey: string, initialName: string) => {
+    setShkoloCreateCourseRowKey(rowKey)
+    setShkoloCreateCourseName(initialName)
+  }
+
+  const rematchShkoloRow = (rowKey: string, extractedSubject: string) => {
+    const [match] = matchExtractedCoursesToUserCourses([extractedSubject], courses)
+    setShkoloPreviewRows((current) =>
+      current.map((row) =>
+        row.key === rowKey
+          ? {
+              ...row,
+              courseId: match?.matchedCourseId ?? '',
+              matchedCourseName: match?.matchedCourseName ?? '',
+              matchScore: match?.score ?? 0,
+            }
+          : row,
+      ),
+    )
+  }
+
+  const removeShkoloRow = (rowKey: string) => {
+    const confirmed = window.confirm('Remove this subject from import?')
+    if (!confirmed) return
+    if (shkoloCreateCourseRowKey === rowKey) {
+      setShkoloCreateCourseRowKey(null)
+      setShkoloCreateCourseName('')
+    }
+    setShkoloPreviewRows((current) => {
+      const exists = current.some((row) => row.key === rowKey)
+      if (!exists) return current
+      setShkoloRemovedRowsCount((count) => count + 1)
+      return current.filter((row) => row.key !== rowKey)
+    })
+  }
 
   const termsQuery = useQuery({
     queryKey: termsKey,
@@ -325,6 +425,199 @@ export function GradesPage() {
       })
     },
   })
+  const createShkoloCourseMutation = useMutation({
+    mutationFn: async (payload: { rowKey: string; name: string }) => {
+      const created = await createCourse({ name: payload.name.trim() })
+      return { rowKey: payload.rowKey, created }
+    },
+    onSuccess: async ({ rowKey, created }) => {
+      await queryClient.invalidateQueries({ queryKey: ['courses'] })
+      setShkoloPreviewRows((current) =>
+        current.map((row) =>
+          row.key === rowKey
+            ? {
+                ...row,
+                courseId: created.id,
+                matchedCourseName: created.name,
+                matchScore: 1,
+              }
+            : row,
+        ),
+      )
+      setShkoloCreateCourseRowKey((current) => (current === rowKey ? null : current))
+      setShkoloCreateCourseName('')
+      toast({
+        variant: 'success',
+        title: 'Course created',
+        description: `${created.name} was created and assigned.`,
+      })
+    },
+    onError: () => {
+      toast({
+        variant: 'error',
+        title: 'Could not create course',
+        description: 'Check the course name and try again.',
+      })
+    },
+  })
+  const shkoloExtractMutation = useMutation({
+    mutationFn: async () => {
+      if (!shkoloForm.file) return null
+      return importShkoloPdf(shkoloForm.file, { debug: showShkoloDebug })
+    },
+    onSuccess: (result) => {
+      if (!result) return
+
+      setShkoloRemovedRowsCount(0)
+      setShkoloCreateCourseRowKey(null)
+      setShkoloCreateCourseName('')
+      const matches = matchExtractedCoursesToUserCourses(
+        result.rows.map((row) => row.extractedSubject),
+        courses,
+      )
+
+      const currentGradesCount = result.rows.reduce((sum, row) => sum + row.currentGrades.length, 0)
+      const termGradesFoundCount = result.rows.reduce(
+        (sum, row) => sum + (row.term1 == null ? 0 : 1) + (row.term2 == null ? 0 : 1),
+        0,
+      )
+
+      setShkoloMeta({
+        fileName: result.fileName,
+        detectedYear: result.detectedYear,
+        subjectsFound: result.rows.length,
+        parsedRows: result.rows.length,
+        currentGradesCount,
+        termGradesFoundCount,
+        skippedLines: result.skippedLines,
+        debug: result.debug,
+      })
+
+      setShkoloPreviewRows(
+        result.rows.map((row, index) => {
+          const match = matches[index]
+          return {
+            key: `${index}-${row.extractedSubject}`,
+            subjectName: row.extractedSubject,
+            courseId: match?.matchedCourseId ?? '',
+            matchedCourseName: match?.matchedCourseName ?? '',
+            matchScore: match?.score ?? 0,
+            term1Final: row.term1 == null ? '' : String(row.term1),
+            term2Final: row.term2 == null ? '' : String(row.term2),
+            yearFinal: '',
+            term1Current: row.currentGrades.join(', '),
+            term2Current: '',
+          }
+        }),
+      )
+    },
+  })
+  const shkoloImportSaveMutation = useMutation({
+    mutationFn: async () => {
+      if (!shkoloForm.targetTermId) return 0
+
+      const categoryCache = new Map<string, { currentId: string; termGradeId: string }>()
+      const importMetadata = {
+        importType: 'shkoloPdf',
+        fileName: shkoloMeta?.fileName ?? shkoloForm.file?.name ?? 'shkolo.pdf',
+        importedAt: new Date().toISOString(),
+      }
+
+      const ensureCategoryId = async (courseId: string, categoryName: 'Current' | 'Term grade') => {
+        const existing = await getGradeCategories({ courseId })
+        const found = existing.find((category) => category.name.trim().toLowerCase() === categoryName.toLowerCase())
+        if (found) return found.id
+
+        const created = await createGradeCategory({
+          courseId,
+          name: categoryName,
+          weight: categoryName === 'Term grade' ? 30 : 20,
+          dropLowest: false,
+        })
+        return created.id
+      }
+
+      const getCategoryIds = async (courseId: string) => {
+        const cached = categoryCache.get(courseId)
+        if (cached) return cached
+
+        const currentId = await ensureCategoryId(courseId, 'Current')
+        const termGradeId = await ensureCategoryId(courseId, 'Term grade')
+        const value = { currentId, termGradeId }
+        categoryCache.set(courseId, value)
+        return value
+      }
+
+      const items: Array<{
+        courseId: string
+        categoryId?: string | null
+        gradeValue: number
+        weight: number
+        note?: string
+        isFinal?: boolean
+        finalType?: 'TERM1' | 'TERM2' | 'YEAR' | null
+        importMetadata?: Record<string, unknown> | null
+      }> = []
+
+      for (const row of shkoloPreviewRows) {
+        if (!row.courseId) continue
+        const { currentId, termGradeId } = await getCategoryIds(row.courseId)
+
+        if (shkoloForm.includeCurrentGrades) {
+          const currentValues = [...parseGradeListText(row.term1Current), ...parseGradeListText(row.term2Current)]
+          for (const value of currentValues) {
+            items.push({
+              courseId: row.courseId,
+              categoryId: currentId,
+              gradeValue: value,
+              weight: 1,
+              note: 'Shkolo current grade',
+              isFinal: false,
+              importMetadata,
+            })
+          }
+        }
+
+        const finalValue = parseOptionalNumber(shkoloForm.termGradeSource === 'term1' ? row.term1Final : row.term2Final)
+        if (finalValue != null) {
+          items.push({
+            courseId: row.courseId,
+            categoryId: termGradeId,
+            gradeValue: finalValue,
+            weight: 1,
+            note: `Shkolo term grade (${shkoloForm.termGradeSource === 'term1' ? 'Term 1' : 'Term 2'})`,
+            isFinal: true,
+            finalType: shkoloForm.termGradeSource === 'term1' ? 'TERM1' : 'TERM2',
+            importMetadata,
+          })
+        }
+      }
+
+      if (!items.length) return 0
+      const result = await bulkImportGrades({
+        termId: shkoloForm.targetTermId,
+        scale: shkoloForm.scale,
+        gradedOn: shkoloForm.gradedOn,
+        items,
+      })
+      return result.count
+    },
+    onSuccess: async (count) => {
+      await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      setImportOpen(false)
+      setImportMode('text')
+      setShkoloPreviewRows([])
+      setShkoloMeta(null)
+      setShkoloRemovedRowsCount(0)
+      setShkoloForm((current) => ({ ...current, file: null }))
+      toast({
+        variant: 'success',
+        title: 'Shkolo PDF import complete',
+        description: `Imported ${count} grade item${count === 1 ? '' : 's'}.`,
+      })
+    },
+  })
   const photoExtractMutation = useMutation({
     mutationFn: async () => {
       if (!photoImportForm.file) return null
@@ -435,6 +728,17 @@ export function GradesPage() {
   const recommendations = recommendationsQuery.data ?? []
   const academicRisk = academicRiskQuery.data ?? []
   const riskByCourseId = useMemo(() => new Map(academicRisk.map((item) => [item.courseId, item])), [academicRisk])
+
+  useEffect(() => {
+    if (!terms.length || !selectedTermId) return
+    const selected = terms.find((term) => term.id === selectedTermId) ?? terms[0]
+    if (!selected) return
+
+    setShkoloForm((current) => ({
+      ...current,
+      targetTermId: current.targetTermId || selected.id,
+    }))
+  }, [selectedTermId, terms])
   const selectedCourseGrades = useMemo(
     () =>
       grades
@@ -546,6 +850,18 @@ export function GradesPage() {
   const canImportFromPhoto =
     photoPreviewRows.length > 0 &&
     photoPreviewRows.every((row) => row.courseId && row.gradeValue.trim() && Number.isFinite(Number(row.gradeValue)))
+  const shkoloReadyRowsCount = shkoloPreviewRows.filter((row) => {
+    if (!row.courseId) return false
+    const selectedTermGrade = parseOptionalNumber(shkoloForm.termGradeSource === 'term1' ? row.term1Final : row.term2Final)
+    if (selectedTermGrade != null) return true
+    if (shkoloForm.includeCurrentGrades) {
+      if (parseGradeListText(row.term1Current).length > 0) return true
+      if (parseGradeListText(row.term2Current).length > 0) return true
+    }
+    return false
+  }).length
+  const canImportShkolo =
+    shkoloPreviewRows.length > 0 && shkoloReadyRowsCount > 0
 
   const onAddGrade = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -1148,93 +1464,530 @@ export function GradesPage() {
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Import grades from text</DialogTitle>
-            <DialogDescription>Paste one grade per line: `CourseName GradeValue`.</DialogDescription>
+            <DialogTitle>Import grades</DialogTitle>
+            <DialogDescription>Choose a source and review before saving.</DialogDescription>
           </DialogHeader>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant={importMode === 'text' ? 'default' : 'outline'}
+              onClick={() => setImportMode('text')}
+            >
+              Paste text
+            </Button>
+            <Button
+              type="button"
+              variant={importMode === 'shkolo-pdf' ? 'default' : 'outline'}
+              onClick={() => setImportMode('shkolo-pdf')}
+            >
+              Import Shkolo PDF
+            </Button>
+          </div>
           <div className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium">Scale</span>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={importForm.scale}
-                  onChange={(event) => setImportForm((current) => ({ ...current, scale: event.target.value as GradeScale }))}
-                >
-                  <option value="percentage">Percentage (0-100)</option>
-                  <option value="german">German (1.0-6.0)</option>
-                  <option value="bulgarian">Bulgarian (2-6)</option>
-                </select>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-sm font-medium">Date</span>
-                <Input
-                  type="date"
-                  value={importForm.gradedOn}
-                  onChange={(event) => setImportForm((current) => ({ ...current, gradedOn: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <label className="space-y-1.5">
-              <span className="text-sm font-medium">Paste text</span>
-              <Textarea
-                rows={8}
-                placeholder={'Math 5.25\nGerman 4.50\nEnglish 5.75'}
-                value={importForm.rawText}
-                onChange={(event) => setImportForm((current) => ({ ...current, rawText: event.target.value }))}
-              />
-            </label>
-
-            <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-              <p className="mb-2 text-sm font-medium">Preview</p>
-              {importPreview.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No lines parsed yet.</p>
-              ) : (
-                <div className="max-h-48 overflow-y-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Course</TableHead>
-                        <TableHead>Grade</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {importPreview.map((item) => (
-                        <TableRow key={item.key}>
-                          <TableCell>{item.valid ? item.courseName : '-'}</TableCell>
-                          <TableCell>{item.valid ? item.gradeValue : '-'}</TableCell>
-                          <TableCell className={cn('text-xs', item.valid ? 'text-emerald-600' : 'text-destructive')}>
-                            {item.valid ? 'OK' : item.error}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+            {importMode === 'text' ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Scale</span>
+                    <select
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={importForm.scale}
+                      onChange={(event) => setImportForm((current) => ({ ...current, scale: event.target.value as GradeScale }))}
+                    >
+                      <option value="percentage">Percentage (0-100)</option>
+                      <option value="german">German (1.0-6.0)</option>
+                      <option value="bulgarian">Bulgarian (2-6)</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Date</span>
+                    <Input
+                      type="date"
+                      value={importForm.gradedOn}
+                      onChange={(event) => setImportForm((current) => ({ ...current, gradedOn: event.target.value }))}
+                    />
+                  </label>
                 </div>
-              )}
-            </div>
+
+                <label className="space-y-1.5">
+                  <span className="text-sm font-medium">Paste text</span>
+                  <Textarea
+                    rows={8}
+                    placeholder={'Math 5.25\nGerman 4.50\nEnglish 5.75'}
+                    value={importForm.rawText}
+                    onChange={(event) => setImportForm((current) => ({ ...current, rawText: event.target.value }))}
+                  />
+                </label>
+
+                <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+                  <p className="mb-2 text-sm font-medium">Preview</p>
+                  {importPreview.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No lines parsed yet.</p>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Course</TableHead>
+                            <TableHead>Grade</TableHead>
+                            <TableHead>Status</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {importPreview.map((item) => (
+                            <TableRow key={item.key}>
+                              <TableCell>{item.valid ? item.courseName : '-'}</TableCell>
+                              <TableCell>{item.valid ? item.gradeValue : '-'}</TableCell>
+                              <TableCell className={cn('text-xs', item.valid ? 'text-emerald-600' : 'text-destructive')}>
+                                {item.valid ? 'OK' : item.error}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Scale</span>
+                    <select
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={shkoloForm.scale}
+                      onChange={(event) => setShkoloForm((current) => ({ ...current, scale: event.target.value as GradeScale }))}
+                    >
+                      <option value="bulgarian">Bulgarian (2-6)</option>
+                      <option value="percentage">Percentage (0-100)</option>
+                      <option value="german">German (1.0-6.0)</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Date</span>
+                    <Input
+                      type="date"
+                      value={shkoloForm.gradedOn}
+                      onChange={(event) => setShkoloForm((current) => ({ ...current, gradedOn: event.target.value }))}
+                    />
+                  </label>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Target term</span>
+                    <select
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={shkoloForm.targetTermId}
+                      onChange={(event) => setShkoloForm((current) => ({ ...current, targetTermId: event.target.value }))}
+                    >
+                      <option value="">Select term</option>
+                      {terms.map((term) => (
+                        <option key={term.id} value={term.id}>
+                          {term.schoolYear} • {term.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-sm font-medium">Term grade source</span>
+                    <select
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={shkoloForm.termGradeSource}
+                      onChange={(event) =>
+                        setShkoloForm((current) => ({
+                          ...current,
+                          termGradeSource: event.target.value as 'term1' | 'term2',
+                        }))
+                      }
+                    >
+                      <option value="term1">Term 1 (Първи срок)</option>
+                      <option value="term2">Term 2 (Втори срок)</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="space-y-1.5">
+                  <span className="text-sm font-medium">Upload Shkolo PDF</span>
+                  <Input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(event) => {
+                      setShkoloMeta(null)
+                      setShkoloPreviewRows([])
+                      setShkoloRemovedRowsCount(0)
+                      setShkoloCreateCourseRowKey(null)
+                      setShkoloCreateCourseName('')
+                      setShkoloForm((current) => ({
+                        ...current,
+                        file: event.target.files?.[0] ?? null,
+                      }))
+                    }}
+                  />
+                </label>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={shkoloForm.includeCurrentGrades}
+                    onChange={(event) =>
+                      setShkoloForm((current) => ({ ...current, includeCurrentGrades: event.target.checked }))
+                    }
+                  />
+                  Import current grades as individual items
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={showShkoloDebug}
+                    onChange={(event) => setShowShkoloDebug(event.target.checked)}
+                  />
+                  Show debug
+                </label>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => shkoloExtractMutation.mutate()}
+                  disabled={!shkoloForm.file || shkoloExtractMutation.isPending}
+                >
+                  Parse Shkolo PDF
+                </Button>
+
+                {shkoloMeta ? (
+                  <div className="rounded-md border border-border/70 bg-background/70 p-3 text-xs text-muted-foreground">
+                    <p>
+                      File: <span className="font-medium text-foreground">{shkoloMeta.fileName}</span>
+                    </p>
+                    <p>
+                      Parsed rows: <span className="font-medium text-foreground">{shkoloMeta.parsedRows}</span>
+                      {' · '}
+                      Removed rows: <span className="font-medium text-foreground">{shkoloRemovedRowsCount}</span>
+                      {' · '}
+                      Skipped rows: <span className="font-medium text-foreground">{shkoloMeta.skippedLines}</span>
+                      {' · '}
+                      Ready to import: <span className="font-medium text-foreground">{shkoloReadyRowsCount}</span>
+                      {' · '}
+                      Subjects found: <span className="font-medium text-foreground">{shkoloMeta.subjectsFound}</span>
+                    </p>
+                    <p>
+                      Current grades: <span className="font-medium text-foreground">{shkoloMeta.currentGradesCount}</span>
+                      {' · '}
+                      Term grades: <span className="font-medium text-foreground">{shkoloMeta.termGradesFoundCount}</span>
+                    </p>
+                    {shkoloMeta.detectedYear ? (
+                      <p>
+                        Detected year: <span className="font-medium text-foreground">{shkoloMeta.detectedYear}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {shkoloMeta && shkoloMeta.parsedRows === 0 ? (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                    No subjects detected. Try a different PDF export or enable debug.
+                  </div>
+                ) : null}
+
+                {showShkoloDebug ? (
+                  shkoloMeta?.debug ? (
+                    <div className="space-y-2 rounded-md border border-border/70 bg-background/70 p-3 text-xs text-muted-foreground">
+                      <p>
+                        Extracted text total: <span className="font-medium text-foreground">{shkoloMeta.debug.totalExtractedLength}</span>
+                        {' · '}
+                        OCR fallback: <span className="font-medium text-foreground">{shkoloMeta.debug.usedOcrFallback ? 'yes' : 'no'}</span>
+                      </p>
+                      {shkoloMeta.debug.extractedPageTextLengths.map((pageInfo, index) => (
+                        <div key={`debug-page-${pageInfo.page}-${index}`} className="rounded border border-border/60 p-2">
+                          <p>
+                            Page {pageInfo.page}: length {pageInfo.length}
+                          </p>
+                          {shkoloMeta.debug?.rawSamples[index] ? (
+                            <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap text-[11px] leading-4 text-muted-foreground">
+                              {shkoloMeta.debug?.rawSamples[index]?.slice(0, 500)}
+                            </pre>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-border/70 bg-background/70 p-3 text-xs text-muted-foreground">
+                      Debug data is available only when you parse with &quot;Show debug&quot; enabled.
+                    </div>
+                  )
+                ) : null}
+
+                {shkoloPreviewRows.length > 0 ? (
+                  <div className="max-h-72 overflow-y-auto rounded-lg border border-border/70 bg-background/70 p-2">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Extracted subject</TableHead>
+                          <TableHead>Matched course</TableHead>
+                          <TableHead>T1 final</TableHead>
+                          <TableHead>T2 final</TableHead>
+                          <TableHead>Year final</TableHead>
+                          <TableHead>T1 current</TableHead>
+                          <TableHead>T2 current</TableHead>
+                          <TableHead>Match</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {shkoloPreviewRows.map((row) => (
+                          <TableRow key={row.key}>
+                            <TableCell>
+                              <div className="space-y-1">
+                                <Input
+                                  value={row.subjectName}
+                                  onChange={(event) =>
+                                    setShkoloPreviewRows((current) =>
+                                      current.map((item) =>
+                                        item.key === row.key
+                                          ? { ...item, subjectName: event.target.value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
+                                  onBlur={(event) => rematchShkoloRow(row.key, event.target.value)}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => rematchShkoloRow(row.key, row.subjectName)}
+                                >
+                                  Re-match
+                                </Button>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="space-y-2">
+                                {courses.length > 0 ? (
+                                  <select
+                                    className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                                    value={row.courseId}
+                                    onChange={(event) => {
+                                      const value = event.target.value
+                                      if (value === '__create_new__') {
+                                        openShkoloCreateCourseDialog(row.key, row.subjectName)
+                                        setShkoloPreviewRows((current) =>
+                                          current.map((item) =>
+                                            item.key === row.key
+                                              ? { ...item, courseId: '', matchedCourseName: '' }
+                                              : item,
+                                          ),
+                                        )
+                                        return
+                                      }
+                                      const selected = courses.find((course) => course.id === value)
+                                      setShkoloPreviewRows((current) =>
+                                        current.map((item) =>
+                                          item.key === row.key
+                                            ? { ...item, courseId: value, matchedCourseName: selected?.name ?? '' }
+                                            : item,
+                                        ),
+                                      )
+                                    }}
+                                  >
+                                    <option value="">Match course...</option>
+                                    {courses.map((course) => (
+                                      <option key={course.id} value={course.id}>
+                                        {course.name}
+                                      </option>
+                                    ))}
+                                    <option value="__create_new__">Create new...</option>
+                                  </select>
+                                ) : (
+                                  <div className="rounded-md border border-border/70 bg-background/70 p-2 text-xs text-muted-foreground">
+                                    <p>No courses found.</p>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="mt-2"
+                                      onClick={() => openShkoloCreateCourseDialog(row.key, row.subjectName)}
+                                    >
+                                      Create first course
+                                    </Button>
+                                  </div>
+                                )}
+                                {courses.length > 0 && (!row.courseId || shkoloCreateCourseRowKey === row.key) ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => openShkoloCreateCourseDialog(row.key, row.subjectName)}
+                                    >
+                                      + Create course
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        createShkoloCourseMutation.mutate({
+                                          rowKey: row.key,
+                                          name: row.subjectName,
+                                        })
+                                      }
+                                      disabled={createShkoloCourseMutation.isPending}
+                                    >
+                                      Create &amp; assign
+                                    </Button>
+                                  </div>
+                                ) : null}
+                                {shkoloCreateCourseRowKey === row.key ? (
+                                  <div className="space-y-1 rounded-md border border-border/70 p-2">
+                                    <Input
+                                      value={shkoloCreateCourseName}
+                                      onChange={(event) => setShkoloCreateCourseName(event.target.value)}
+                                      placeholder="Course name"
+                                    />
+                                    <div className="flex gap-1">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={() =>
+                                          createShkoloCourseMutation.mutate({
+                                            rowKey: row.key,
+                                            name: shkoloCreateCourseName,
+                                          })
+                                        }
+                                        disabled={!shkoloCreateCourseName.trim() || createShkoloCourseMutation.isPending}
+                                      >
+                                        Add
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          setShkoloCreateCourseRowKey(null)
+                                          setShkoloCreateCourseName('')
+                                        }}
+                                      >
+                                        Cancel
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={row.term1Final}
+                                onChange={(event) =>
+                                  setShkoloPreviewRows((current) =>
+                                    current.map((item) => (item.key === row.key ? { ...item, term1Final: event.target.value } : item)),
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={row.term2Final}
+                                onChange={(event) =>
+                                  setShkoloPreviewRows((current) =>
+                                    current.map((item) => (item.key === row.key ? { ...item, term2Final: event.target.value } : item)),
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={row.yearFinal}
+                                onChange={(event) =>
+                                  setShkoloPreviewRows((current) =>
+                                    current.map((item) => (item.key === row.key ? { ...item, yearFinal: event.target.value } : item)),
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                value={row.term1Current}
+                                onChange={(event) =>
+                                  setShkoloPreviewRows((current) =>
+                                    current.map((item) => (item.key === row.key ? { ...item, term1Current: event.target.value } : item)),
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <Input
+                                value={row.term2Current}
+                                onChange={(event) =>
+                                  setShkoloPreviewRows((current) =>
+                                    current.map((item) => (item.key === row.key ? { ...item, term2Current: event.target.value } : item)),
+                                  )
+                                }
+                              />
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{Math.round(row.matchScore * 100)}%</TableCell>
+                            <TableCell>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => removeShkoloRow(row.key)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Remove
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
           <DialogFooter>
-            <Button
-              onClick={() =>
-                bulkImportMutation.mutate({
-                  termId: selectedTermId,
-                  scale: importForm.scale,
-                  gradedOn: importForm.gradedOn,
-                  items: importPreview
-                    .filter((item): item is { key: string; raw: string; valid: true; courseId: string; courseName: string; gradeValue: number } => item.valid)
-                    .map((item) => ({
-                      courseId: item.courseId,
-                      gradeValue: item.gradeValue,
-                      weight: 1,
-                    })),
-                })
-              }
-              disabled={!canImport || bulkImportMutation.isPending}
-            >
-              Import all
-            </Button>
+            {importMode === 'text' ? (
+              <Button
+                onClick={() =>
+                  bulkImportMutation.mutate({
+                    termId: selectedTermId,
+                    scale: importForm.scale,
+                    gradedOn: importForm.gradedOn,
+                    items: importPreview
+                      .filter((item): item is { key: string; raw: string; valid: true; courseId: string; courseName: string; gradeValue: number } => item.valid)
+                      .map((item) => ({
+                        courseId: item.courseId,
+                        gradeValue: item.gradeValue,
+                        weight: 1,
+                      })),
+                  })
+                }
+                disabled={!canImport || bulkImportMutation.isPending}
+              >
+                Import all
+              </Button>
+            ) : (
+              <Button
+                onClick={() => shkoloImportSaveMutation.mutate()}
+                disabled={
+                  !shkoloMeta ||
+                  shkoloMeta.parsedRows === 0 ||
+                  !canImportShkolo ||
+                  !shkoloForm.targetTermId ||
+                  shkoloImportSaveMutation.isPending
+                }
+              >
+                Save parsed grades
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

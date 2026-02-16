@@ -7,7 +7,7 @@ import { getAnalyticsPrediction } from "./analytics-prediction.js";
 import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
 import { ensureFocusGardenTables } from "./focus-garden.js";
-import { ensureGradesTables } from "./grades.js";
+import { ensureGradesTables, getIgnoredShkoloSubjects, setIgnoredShkoloSubjects } from "./grades.js";
 import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
 import { ensureStudyOrganizationTables } from "./organization.js";
@@ -69,6 +69,7 @@ app.get("/me", async () => {
 
   const adaptiveEnabled = await getAdaptiveEnabled(USER_ID);
   const uiPreferences = await getUiPreferences(USER_ID);
+  const ignoredShkoloSubjects = await getIgnoredShkoloSubjects(USER_ID);
   return {
     ...me,
     settings: me.settings
@@ -78,6 +79,7 @@ app.get("/me", async () => {
         }
       : null,
     uiPreferences,
+    ignoredShkoloSubjects,
   };
 });
 
@@ -191,6 +193,7 @@ app.put("/me/preferences", async (req, reply) => {
       widgetStyle?: "soft" | "glass" | "flat";
       layoutDensity?: "comfortable" | "compact" | "cozy";
     };
+    ignoredShkoloSubjects?: string[];
   };
 
   if (!body.settings || !body.targets) {
@@ -244,6 +247,16 @@ app.put("/me/preferences", async (req, reply) => {
       .send({ error: "Targets must include weekdays 1-7 with non-negative minutes." });
   }
 
+  if (
+    body.ignoredShkoloSubjects !== undefined &&
+    (!Array.isArray(body.ignoredShkoloSubjects) ||
+      body.ignoredShkoloSubjects.some((item) => typeof item !== "string"))
+  ) {
+    return reply
+      .code(400)
+      .send({ error: "ignoredShkoloSubjects must be an array of strings." });
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.settings.upsert({
       where: { userId: USER_ID },
@@ -287,6 +300,10 @@ app.put("/me/preferences", async (req, reply) => {
       }
     : {};
   const uiPreferences = await upsertUiPreferences(USER_ID, nextUiPreferences);
+  const ignoredShkoloSubjects =
+    body.ignoredShkoloSubjects !== undefined
+      ? await setIgnoredShkoloSubjects(USER_ID, body.ignoredShkoloSubjects)
+      : await getIgnoredShkoloSubjects(USER_ID);
 
   await recomputeAndStoreAchievements(USER_ID);
   await recomputeAndStoreStreak(USER_ID);
@@ -305,6 +322,7 @@ app.put("/me/preferences", async (req, reply) => {
         }
       : null,
     uiPreferences,
+    ignoredShkoloSubjects,
   };
 });
 

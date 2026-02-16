@@ -10,12 +10,23 @@ export type CourseMatchResult = {
   score: number
 }
 
+function clamp(value: number, min = 0, max = 1) {
+  return Math.min(max, Math.max(min, value))
+}
+
 function normalizeCourseName(value: string) {
   return value
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function tokenizeCourseName(value: string) {
+  if (!value) return []
+  return value.split(' ').filter(Boolean)
 }
 
 function levenshteinDistance(a: string, b: string) {
@@ -44,18 +55,84 @@ function levenshteinDistance(a: string, b: string) {
   return prev[b.length]
 }
 
-function similarityScore(a: string, b: string) {
-  if (a === b) return 1
+function charSimilarity(a: string, b: string) {
   if (!a.length || !b.length) return 0
 
   if (a.includes(b) || b.includes(a)) {
     const ratio = Math.min(a.length, b.length) / Math.max(a.length, b.length)
-    return 0.9 + ratio * 0.1
+    return clamp(0.88 + ratio * 0.12)
   }
 
   const distance = levenshteinDistance(a, b)
   const maxLen = Math.max(a.length, b.length)
-  return 1 - distance / maxLen
+  return clamp(1 - distance / maxLen)
+}
+
+function tokenOverlapScore(tokensA: string[], tokensB: string[]) {
+  if (!tokensA.length || !tokensB.length) return 0
+
+  const setA = new Set(tokensA)
+  const setB = new Set(tokensB)
+  let exactOverlap = 0
+  for (const token of setA) {
+    if (setB.has(token)) exactOverlap += 1
+  }
+  const exactScore = (2 * exactOverlap) / (setA.size + setB.size)
+
+  let fuzzySum = 0
+  const [smaller, larger] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA]
+  for (const token of smaller) {
+    let best = 0
+    for (const candidate of larger) {
+      const score = charSimilarity(token, candidate)
+      if (score > best) best = score
+    }
+    if (best >= 0.72) fuzzySum += best
+  }
+  const fuzzyScore = fuzzySum / Math.max(tokensA.length, tokensB.length)
+
+  return Math.max(exactScore, fuzzyScore)
+}
+
+function similarityScore(a: string, b: string) {
+  if (a === b) return 1
+  if (!a.length || !b.length) return 0
+
+  const tokensA = tokenizeCourseName(a)
+  const tokensB = tokenizeCourseName(b)
+  const tokenScore = tokenOverlapScore(tokensA, tokensB)
+  const charScore = charSimilarity(a, b)
+
+  const overlapBonus = tokenScore >= 0.66 ? 0.1 : tokenScore >= 0.5 ? 0.06 : tokenScore >= 0.34 ? 0.03 : 0
+  return clamp(tokenScore * 0.6 + charScore * 0.4 + overlapBonus)
+}
+
+export function runCourseMatchingDevSelfTest() {
+  if (!import.meta.env.DEV) {
+    return { ran: false, passed: null as boolean | null, cases: [] as Array<{ label: string; score: number }> }
+  }
+
+  const exact = matchExtractedCoursesToUserCourses(
+    ['Български език и литература'],
+    [{ id: '1', name: 'Български език и литература' }],
+    { threshold: 0 },
+  )[0]
+
+  const rough = matchExtractedCoursesToUserCourses(
+    ['Обектно-ориентирано програмиране'],
+    [{ id: '2', name: 'Обектно ориентирано програмиране' }],
+    { threshold: 0 },
+  )[0]
+
+  const passed = exact.score > 0.9 && rough.score > 0.7
+  return {
+    ran: true,
+    passed,
+    cases: [
+      { label: 'Български exact match', score: exact.score },
+      { label: 'ООП rough variant match', score: rough.score },
+    ],
+  }
 }
 
 export function matchExtractedCoursesToUserCourses(

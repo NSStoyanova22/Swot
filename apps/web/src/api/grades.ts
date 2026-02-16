@@ -12,6 +12,7 @@ import type {
   GradesWhatIfResultDto,
   GradesSummaryDto,
   OcrTextResponseDto,
+  ShkoloPdfImportResultDto,
   StudyRecommendationDto,
   TermDto,
   UpdateGradeCategoryDto,
@@ -91,6 +92,17 @@ export async function extractTextFromImage(file: File) {
 
   return apiRequest<OcrTextResponseDto>('/ocr', {
     method: 'POST',
+    body: formData,
+  })
+}
+
+export async function importShkoloPdf(file: File, options: { debug?: boolean } = {}) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  return apiRequest<ShkoloPdfImportResultDto>('/grades/import-shkolo-pdf', {
+    method: 'POST',
+    query: options.debug ? { debug: '1' } : undefined,
     body: formData,
   })
 }

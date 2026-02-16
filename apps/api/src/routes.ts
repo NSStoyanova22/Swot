@@ -10,12 +10,18 @@ import {
   getFocusGardenOverview,
   upsertFocusGardenGrowthFromSession,
 } from "./focus-garden.js";
-import { normalizeGradeScale, toPerformanceScore, type GradeScale } from "./grades.js";
+import { getIgnoredShkoloSubjects, normalizeGradeScale, toPerformanceScore, type GradeScale } from "./grades.js";
 import {
   computeNextReminderTrigger,
   type ReminderRepeatRule,
 } from "./organization.js";
 import { recomputeAndStoreProductivity } from "./productivity.js";
+import {
+  extractShkoloPdfPages,
+  parseShkoloDiaryText,
+  parseShkoloPages,
+  renderPdfPagesToPng,
+} from "./shkolo-pdf.js";
 import { recomputeAndStoreStreak } from "./streak.js";
 
 const USER_ID = "swot-user";
@@ -24,9 +30,30 @@ const createTesseractWorker = require("tesseract.js-node") as (options: {
   tessdata: string | Buffer;
   languages: string[];
 }) => Promise<{ recognize: (input: string | Buffer, language: string) => string }>;
+const tesseractJs = require("tesseract.js") as {
+  createWorker: (
+    langs?: string | string[],
+    oem?: number,
+    options?: Record<string, unknown>,
+    config?: Record<string, unknown>,
+  ) => Promise<{
+    setParameters: (params: Record<string, string>) => Promise<unknown>;
+    recognize: (
+      image: Buffer,
+      options?: Record<string, unknown>,
+    ) => Promise<{ data: { text: string } }>;
+  }>;
+};
 const defaultTessdataDir = fileURLToPath(new URL("../tessdata", import.meta.url));
 const ocrTessdataDir = process.env.OCR_TESSDATA_DIR ?? defaultTessdataDir;
 let ocrWorkerPromise: Promise<{ recognize: (input: string | Buffer, language: string) => string }> | null = null;
+let shkoloPdfOcrWorkerPromise: Promise<{
+  setParameters: (params: Record<string, string>) => Promise<unknown>;
+  recognize: (
+    image: Buffer,
+    options?: Record<string, unknown>,
+  ) => Promise<{ data: { text: string } }>;
+}> | null = null;
 
 function overlapMinutes(
   aStart: Date,
@@ -113,6 +140,30 @@ function getOcrWorker() {
     });
   }
   return ocrWorkerPromise;
+}
+
+function getShkoloPdfOcrWorker() {
+  if (!shkoloPdfOcrWorkerPromise) {
+    shkoloPdfOcrWorkerPromise = tesseractJs.createWorker("bul+eng");
+  }
+  return shkoloPdfOcrWorkerPromise;
+}
+
+type FinalType = "TERM1" | "TERM2" | "YEAR";
+
+function normalizeFinalType(value: unknown): FinalType | null {
+  if (value === "TERM1" || value === "TERM2" || value === "YEAR") return value;
+  return null;
+}
+
+function parseImportMetadata(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function findOpenPlannerSlot(
@@ -685,8 +736,11 @@ export async function routes(app: FastifyInstance) {
         grade_value: number;
         performance_score: number;
         weight: number;
+        is_final: number;
+        final_type: string | null;
         graded_on: Date;
         note: string | null;
+        import_metadata: string | null;
         created_at: Date;
         updated_at: Date;
         term_name: string;
@@ -708,8 +762,11 @@ export async function routes(app: FastifyInstance) {
         g.grade_value,
         g.performance_score,
         g.weight,
+        g.is_final,
+        g.final_type,
         g.graded_on,
         g.note,
+        g.import_metadata,
         g.created_at,
         g.updated_at,
         t.name AS term_name,
@@ -739,8 +796,11 @@ export async function routes(app: FastifyInstance) {
       gradeValue: Number(row.grade_value),
       performanceScore: Number(row.performance_score),
       weight: Number(row.weight),
+      isFinal: Boolean(row.is_final),
+      finalType: normalizeFinalType(row.final_type),
       gradedOn: toIsoDate(row.graded_on),
       note: row.note,
+      importMetadata: parseImportMetadata(row.import_metadata),
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
       term: {
@@ -775,6 +835,9 @@ export async function routes(app: FastifyInstance) {
       weight?: number;
       gradedOn: string;
       note?: string;
+      isFinal?: boolean;
+      finalType?: "TERM1" | "TERM2" | "YEAR" | null;
+      importMetadata?: Record<string, unknown> | null;
     };
 
     const termId = Number(body.termId);
@@ -784,6 +847,12 @@ export async function routes(app: FastifyInstance) {
     const gradedOn = new Date(body.gradedOn);
     const performanceScore = toPerformanceScore(scale, gradeValue);
     const categoryId = body.categoryId ? Number(body.categoryId) : null;
+    const isFinal = Boolean(body.isFinal);
+    const finalType = isFinal ? normalizeFinalType(body.finalType) : null;
+    const importMetadata =
+      body.importMetadata && typeof body.importMetadata === "object"
+        ? JSON.stringify(body.importMetadata)
+        : null;
 
     await prisma.$queryRaw`
       SELECT id
@@ -802,10 +871,10 @@ export async function routes(app: FastifyInstance) {
     }
 
     await prisma.$executeRaw`
-      INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note)
-      VALUES (${USER_ID}, ${termId}, ${body.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${gradedOn}, ${
+      INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, is_final, final_type, graded_on, note, import_metadata)
+      VALUES (${USER_ID}, ${termId}, ${body.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${isFinal}, ${finalType}, ${gradedOn}, ${
       body.note?.trim() || null
-    })
+    }, ${importMetadata})
     `;
 
     const row = await prisma.$queryRaw<
@@ -835,8 +904,11 @@ export async function routes(app: FastifyInstance) {
       gradeValue,
       performanceScore: roundScore(performanceScore),
       weight,
+      isFinal,
+      finalType,
       gradedOn: toIsoDate(gradedOn),
       note: body.note?.trim() || null,
+      importMetadata: parseImportMetadata(importMetadata),
       createdAt: inserted.created_at.toISOString(),
       updatedAt: inserted.updated_at.toISOString(),
     };
@@ -853,6 +925,9 @@ export async function routes(app: FastifyInstance) {
         gradeValue: number;
         weight?: number;
         note?: string;
+        isFinal?: boolean;
+        finalType?: "TERM1" | "TERM2" | "YEAR" | null;
+        importMetadata?: Record<string, unknown> | null;
       }>;
     };
 
@@ -879,6 +954,12 @@ export async function routes(app: FastifyInstance) {
       const weight = Math.max(0.05, Number(item.weight ?? 1));
       const performanceScore = toPerformanceScore(scale, gradeValue);
       const categoryId = item.categoryId ? Number(item.categoryId) : null;
+      const isFinal = Boolean(item.isFinal);
+      const finalType = isFinal ? normalizeFinalType(item.finalType) : null;
+      const importMetadata =
+        item.importMetadata && typeof item.importMetadata === "object"
+          ? JSON.stringify(item.importMetadata)
+          : null;
       if (categoryId) {
         const categoryRows = await prisma.$queryRaw<Array<{ id: number }>>`
           SELECT id
@@ -889,10 +970,10 @@ export async function routes(app: FastifyInstance) {
         if (!categoryRows.length) throw new Error("Invalid grade category");
       }
       await prisma.$executeRaw`
-        INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note)
-        VALUES (${USER_ID}, ${termId}, ${item.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${gradedOn}, ${
+        INSERT INTO grade_items (user_id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, is_final, final_type, graded_on, note, import_metadata)
+        VALUES (${USER_ID}, ${termId}, ${item.courseId}, ${categoryId}, ${scale}, ${gradeValue}, ${performanceScore}, ${weight}, ${isFinal}, ${finalType}, ${gradedOn}, ${
         item.note?.trim() || null
-      })
+      }, ${importMetadata})
       `;
       const row = await prisma.$queryRaw<Array<{ id: number }>>`
         SELECT id
@@ -909,6 +990,170 @@ export async function routes(app: FastifyInstance) {
       count: insertedIds.length,
       itemIds: insertedIds,
     };
+  });
+
+  app.post("/grades/import-shkolo-pdf", async (req, reply) => {
+    const query = req.query as { debug?: string };
+    const debugEnabled = query.debug === "1";
+    const scannedThreshold = 300;
+    const file = (await req.file()) as MultipartFile | undefined;
+    if (!file) {
+      return reply
+        .code(400)
+        .send({ error: "Missing PDF file in multipart form-data field 'file'." });
+    }
+
+    const isPdfMime =
+      file.mimetype === "application/pdf" ||
+      file.mimetype === "application/x-pdf";
+    const isPdfName = /\.pdf$/i.test(file.filename || "");
+    if (!isPdfMime && !isPdfName) {
+      return reply
+        .code(400)
+        .send({ error: `Unsupported file type '${file.mimetype}'. Expected PDF.` });
+    }
+
+    try {
+      const bytes = await file.toBuffer();
+      req.log.info(
+        {
+          mimeType: file.mimetype,
+          fileName: file.filename,
+          fileSize: bytes.length,
+        },
+        "Shkolo PDF upload metadata",
+      );
+
+      const pages = await extractShkoloPdfPages(bytes);
+      const extractedPageTextLengths = pages.map((page) => ({
+        page: page.page,
+        length: page.text.length,
+      }));
+      for (const page of pages) {
+        req.log.info(
+          { page: page.page, textLength: page.text.length },
+          "Shkolo PDF extracted page text",
+        );
+      }
+
+      const totalExtractedLength = pages.reduce(
+        (sum, page) => sum + page.text.length,
+        0,
+      );
+
+      let usedOcrFallback = false;
+      let pagesForParsing = pages;
+      let ocrPageTextLengths: Array<{ page: number; general: number; digits: number; total: number }> = [];
+
+      if (totalExtractedLength < scannedThreshold) {
+        usedOcrFallback = true;
+        req.log.info(
+          {
+            totalExtractedLength,
+            threshold: scannedThreshold,
+          },
+          "Shkolo PDF detected as scanned. Using OCR fallback.",
+        );
+
+        const renderedPages = await renderPdfPagesToPng(bytes);
+        const ocrWorker = await getShkoloPdfOcrWorker();
+        const ocrPages: Array<{ page: number; text: string }> = [];
+
+        for (const rendered of renderedPages) {
+          await ocrWorker.setParameters({ tessedit_char_whitelist: "" });
+          const generalResult = await ocrWorker.recognize(rendered.image);
+          const generalText = generalResult?.data?.text ?? "";
+
+          await ocrWorker.setParameters({
+            tessedit_char_whitelist: "0123456789.,",
+          });
+          const digitsResult = await ocrWorker.recognize(rendered.image);
+          const digitsText = digitsResult?.data?.text ?? "";
+
+          const combinedText = `${generalText}\n${digitsText}`.trim();
+          ocrPages.push({ page: rendered.page, text: combinedText });
+
+          ocrPageTextLengths.push({
+            page: rendered.page,
+            general: generalText.length,
+            digits: digitsText.length,
+            total: combinedText.length,
+          });
+          req.log.info(
+            {
+              page: rendered.page,
+              generalTextLength: generalText.length,
+              digitsTextLength: digitsText.length,
+              combinedTextLength: combinedText.length,
+            },
+            "Shkolo PDF OCR fallback text lengths",
+          );
+        }
+
+        pagesForParsing = ocrPages;
+      }
+
+      const parsed = parseShkoloPages(pagesForParsing);
+      const ignoredShkoloSubjects = await getIgnoredShkoloSubjects(USER_ID);
+      const ignoredSet = new Set(
+        ignoredShkoloSubjects.map((value) =>
+          value.trim().replace(/\s+/g, " ").toLocaleLowerCase("bg")
+        )
+      );
+      const filteredRows = parsed.rows.filter((row) => {
+        const key = row.extractedSubject
+          .trim()
+          .replace(/\s+/g, " ")
+          .toLocaleLowerCase("bg");
+        return !ignoredSet.has(key);
+      });
+      const diaryParsed = debugEnabled
+        ? parseShkoloDiaryText(pagesForParsing.map((page) => page.text))
+        : null;
+
+      const rawSamples = debugEnabled
+        ? pagesForParsing.map((page) => page.text.slice(0, 500))
+        : undefined;
+
+      return {
+        fileName: file.filename,
+        detectedYear: parsed.detectedYear,
+        rows: filteredRows,
+        skippedLines: parsed.skippedLines,
+        debug: rawSamples
+          ? {
+              rawSamples,
+              usedOcrFallback,
+              scannedThreshold,
+              totalExtractedLength,
+              extractedPageTextLengths,
+              ocrPageTextLengths,
+              subjectBlocks:
+                diaryParsed?.rows.map((row) => ({
+                  index: row.index,
+                  extractedSubject: row.extractedSubject,
+                  tokensCount: row.tokens.length,
+                  chosenFinals: {
+                    term1Final: row.term1Final,
+                    term2Final: row.term2Final,
+                    yearFinal: row.yearFinal,
+                    confidence: row.confidence,
+                  },
+                  last15Tokens: row.last15Tokens,
+                  rawBlockSample: row.rawBlockSample,
+                })) ?? [],
+              ignoredShkoloSubjects,
+              filteredOutCount: parsed.rows.length - filteredRows.length,
+            }
+          : undefined,
+      };
+    } catch (error) {
+      req.log.error({ err: error }, "Shkolo PDF parsing failed");
+      return reply.code(500).send({
+        error:
+          "Could not parse Shkolo PDF. Make sure this is a text-based PDF export from Shkolo Дневник.",
+      });
+    }
   });
 
   app.post("/grades/import-photo", async (req) => {
@@ -953,6 +1198,9 @@ export async function routes(app: FastifyInstance) {
       weight?: number;
       gradedOn?: string;
       note?: string | null;
+      isFinal?: boolean;
+      finalType?: "TERM1" | "TERM2" | "YEAR" | null;
+      importMetadata?: Record<string, unknown> | null;
     };
 
     const currentRows = await prisma.$queryRaw<
@@ -965,11 +1213,14 @@ export async function routes(app: FastifyInstance) {
         grade_value: number;
         performance_score: number;
         weight: number;
+        is_final: number;
+        final_type: string | null;
         graded_on: Date;
         note: string | null;
+        import_metadata: string | null;
       }>
     >`
-      SELECT id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, graded_on, note
+      SELECT id, term_id, course_id, category_id, scale, grade_value, performance_score, weight, is_final, final_type, graded_on, note, import_metadata
       FROM grade_items
       WHERE id = ${gradeId} AND user_id = ${USER_ID}
       LIMIT 1
@@ -986,6 +1237,24 @@ export async function routes(app: FastifyInstance) {
     const weight = body.weight === undefined ? Number(current.weight) : Math.max(0.05, Number(body.weight));
     const gradedOn = body.gradedOn ? new Date(body.gradedOn) : new Date(current.graded_on);
     const note = body.note === undefined ? current.note : body.note?.trim() || null;
+    const importMetadata =
+      body.importMetadata === undefined
+        ? parseImportMetadata(current.import_metadata)
+        : body.importMetadata && typeof body.importMetadata === "object"
+          ? body.importMetadata
+          : null;
+    const importMetadataJson =
+      importMetadata && typeof importMetadata === "object"
+        ? JSON.stringify(importMetadata)
+        : null;
+    const isFinal =
+      body.isFinal === undefined ? Boolean(current.is_final) : Boolean(body.isFinal);
+    const finalType =
+      body.isFinal === undefined
+        ? normalizeFinalType(current.final_type)
+        : isFinal
+          ? normalizeFinalType(body.finalType)
+          : null;
     const performanceScore = toPerformanceScore(scale, gradeValue);
     if (categoryId) {
       const categoryRows = await prisma.$queryRaw<Array<{ id: number }>>`
@@ -1006,8 +1275,11 @@ export async function routes(app: FastifyInstance) {
           grade_value = ${gradeValue},
           performance_score = ${performanceScore},
           weight = ${weight},
+          is_final = ${isFinal},
+          final_type = ${finalType},
           graded_on = ${gradedOn},
-          note = ${note}
+          note = ${note},
+          import_metadata = ${importMetadataJson}
       WHERE id = ${gradeId} AND user_id = ${USER_ID}
     `;
 
@@ -1021,8 +1293,11 @@ export async function routes(app: FastifyInstance) {
       gradeValue,
       performanceScore: roundScore(performanceScore),
       weight,
+      isFinal,
+      finalType,
       gradedOn: toIsoDate(gradedOn),
       note,
+      importMetadata,
     };
   });
 
@@ -1252,7 +1527,7 @@ export async function routes(app: FastifyInstance) {
       FROM \`StudySession\` s
       INNER JOIN \`Course\` c ON BINARY c.id = BINARY s.\`courseId\`
       WHERE s.\`userId\` = ${USER_ID} AND s.\`startTime\` >= ${fromDate} AND s.\`startTime\` < ${toDate}
-      GROUP BY s.course_id, c.name
+      GROUP BY s.\`courseId\`, c.name
     `;
 
     const targetRows = await prisma.$queryRaw<
