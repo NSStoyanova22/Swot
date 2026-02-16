@@ -57,6 +57,7 @@ export type SettingsDto = {
   shortSessionMinutes: number
   longSessionMinutes: number
   breakSessionMinutes: number
+  adaptiveEnabled?: boolean
   createdAt: string
 }
 
@@ -83,11 +84,31 @@ export type UpdatePreferencesDto = {
     shortSessionMinutes: number
     longSessionMinutes: number
     breakSessionMinutes: number
+    adaptiveEnabled?: boolean
   }
   targets: Array<{
     weekday: number
     targetMinutes: number
   }>
+}
+
+export type TimerRecommendationDto = {
+  adaptiveEnabled: boolean
+  sessionCount: number
+  baseFocusMinutes: number
+  recommendedFocusMinutes: number
+  appliedDeltaMinutes: number
+  canAdapt: boolean
+  explanation: string
+  signals: {
+    consistencyScore: number
+    completionRatio: number
+    earlyCancelRatio: number
+    breakHeavyRatio: number
+    recentSessions: number
+    previousSessions: number
+  }
+  generatedAt: string
 }
 
 export type CreateCourseDto = {
@@ -170,6 +191,53 @@ export type ProductivityOverviewDto = {
     summary: string
   }
   weeklyTrend: ProductivityTrendDayDto[]
+}
+
+export type AnalyticsInsightsDto = {
+  sessionCount: number
+  unlocked: boolean
+  generatedAt: string
+  bestStudyHourRange: {
+    label: string
+    startHour: number
+    endHour: number
+    minutes: number
+  } | null
+  bestStudyWeekday: {
+    weekday: number
+    label: string
+    minutes: number
+  } | null
+  averageSessionDurationMinutes: number
+  consistencyScore: number
+  burnoutRisk: {
+    level: 'low' | 'medium' | 'high'
+    score: number
+    reason: string
+  }
+  recommendedBreakFrequencyMinutes: number
+  recommendations: string[]
+  explanation: string
+  charts: {
+    weekdayMinutes: Array<{ day: string; minutes: number }>
+    hourRangeMinutes: Array<{ range: string; minutes: number }>
+    sessionTrend: Array<{ week: string; sessions: number; minutes: number }>
+    productivityTrend: Array<{ date: string; score: number }>
+  }
+}
+
+export type AnalyticsPredictionDto = {
+  predictedMinutes: number
+  studyProbability: number
+  confidenceScore: number
+  explanation: string
+  factors: {
+    recentFrequency: number
+    weekdayPattern: number
+    streakMomentum: number
+    productivityTrend: number
+  }
+  generatedAt: string
 }
 
 export type PlannerBlockStatus = 'upcoming' | 'completed' | 'missed'

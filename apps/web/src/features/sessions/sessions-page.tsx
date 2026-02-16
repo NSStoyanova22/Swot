@@ -196,6 +196,9 @@ function LogSessionDialog({
       queryClient.invalidateQueries({ queryKey: sessionsQueryBaseKey })
       queryClient.invalidateQueries({ queryKey: ['streak'] })
       queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['analytics-insights'] })
+      queryClient.invalidateQueries({ queryKey: ['analytics-prediction'] })
+      queryClient.invalidateQueries({ queryKey: ['timer-recommendation'] })
       queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
       queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
     },

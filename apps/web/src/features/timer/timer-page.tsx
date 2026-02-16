@@ -1,12 +1,13 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock3, Coffee, Pause, Play, RotateCcw, Save, Timer, Zap } from 'lucide-react'
+import { Clock3, Coffee, Info, Pause, Play, RotateCcw, Save, Timer, Zap } from 'lucide-react'
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
 import type { CreateSessionDto } from '@/api/dtos'
 import { getMe } from '@/api/me'
 import { createSession } from '@/api/sessions'
+import { getTimerRecommendation } from '@/api/timer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FocusSoundsPanel } from '@/features/timer/focus-sounds-panel'
@@ -117,6 +118,9 @@ function LogSessionModal({
       queryClient.invalidateQueries({ queryKey: ['sessions'] })
       queryClient.invalidateQueries({ queryKey: ['streak'] })
       queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['analytics-insights'] })
+      queryClient.invalidateQueries({ queryKey: ['analytics-prediction'] })
+      queryClient.invalidateQueries({ queryKey: ['timer-recommendation'] })
       queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
       queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
       onOpenChange(false)
@@ -233,16 +237,37 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     queryKey: ['me'],
     queryFn: ({ signal }) => getMe(signal),
   })
+  const recommendationQuery = useQuery({
+    queryKey: ['timer-recommendation'],
+    queryFn: ({ signal }) => getTimerRecommendation(signal),
+  })
 
   const settings = meQuery.data?.settings
+  const recommendation = recommendationQuery.data
+
+  const baseFocusMinutes = Math.max(1, settings?.shortSessionMinutes ?? 25)
+  const adaptiveFocusMinutes =
+    recommendation && recommendation.adaptiveEnabled && recommendation.canAdapt
+      ? recommendation.recommendedFocusMinutes
+      : baseFocusMinutes
+
+  const [focusOverrideEnabled, setFocusOverrideEnabled] = useState(false)
+  const [focusOverrideMinutes, setFocusOverrideMinutes] = useState('')
+
+  const effectiveFocusMinutes = useMemo(() => {
+    if (!focusOverrideEnabled) return adaptiveFocusMinutes
+    const parsed = Number(focusOverrideMinutes)
+    if (!Number.isFinite(parsed) || parsed <= 0) return adaptiveFocusMinutes
+    return Math.max(5, Math.min(180, Math.round(parsed)))
+  }, [adaptiveFocusMinutes, focusOverrideEnabled, focusOverrideMinutes])
 
   const modeDurations = useMemo(
     () => ({
-      focus: Math.max(1, settings?.shortSessionMinutes ?? 25),
+      focus: effectiveFocusMinutes,
       short: Math.max(1, settings?.breakSessionMinutes ?? 5),
       long: Math.max(1, settings?.longSessionMinutes ?? 50),
     }),
-    [settings?.breakSessionMinutes, settings?.longSessionMinutes, settings?.shortSessionMinutes],
+    [effectiveFocusMinutes, settings?.breakSessionMinutes, settings?.longSessionMinutes],
   )
 
   const [mode, setMode] = useState<PomodoroMode>('focus')
@@ -315,6 +340,11 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     setPomodoroRunning(true)
   }, [startFocusSignal])
 
+  useEffect(() => {
+    if (focusOverrideEnabled) return
+    setFocusOverrideMinutes(String(adaptiveFocusMinutes))
+  }, [adaptiveFocusMinutes, focusOverrideEnabled])
+
   const resetPomodoro = () => {
     setPomodoroRunning(false)
     setRemainingSeconds(modeSeconds)
@@ -378,6 +408,51 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
             <p className="mt-2 text-xs text-muted-foreground">
               Duration: {modeDurations[mode]} min from Settings {settings?.soundsEnabled ? '(sound on)' : '(sound off)'}
             </p>
+          </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Adaptive focus recommendation</p>
+              <span
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+                title={recommendation?.explanation ?? 'No recommendation yet'}
+              >
+                <Info className="h-3.5 w-3.5" />
+                Why this?
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Recommended: <span className="font-semibold text-foreground">{adaptiveFocusMinutes} min</span>
+              {recommendation
+                ? ` · Base ${recommendation.baseFocusMinutes} min · Delta ${recommendation.appliedDeltaMinutes >= 0 ? '+' : ''}${recommendation.appliedDeltaMinutes} min`
+                : ''}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {recommendation?.adaptiveEnabled
+                ? recommendation?.canAdapt
+                  ? recommendation.explanation
+                  : 'Adaptive mode is on, but more sessions are needed before adjustment starts.'
+                : 'Adaptive mode is off. Enable it in Settings to auto-adjust focus length.'}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-input px-3 text-sm"
+                onClick={() => setFocusOverrideEnabled((current) => !current)}
+              >
+                {focusOverrideEnabled ? 'Use adaptive value' : 'Override manually'}
+              </button>
+              <input
+                type="number"
+                min={5}
+                max={180}
+                className="h-9 w-24 rounded-md border border-input bg-background px-2 text-sm"
+                value={focusOverrideMinutes}
+                onChange={(event) => setFocusOverrideMinutes(event.target.value)}
+                disabled={!focusOverrideEnabled}
+              />
+              <span className="text-xs text-muted-foreground">min</span>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">

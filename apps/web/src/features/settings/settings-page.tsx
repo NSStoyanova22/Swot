@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  FileDown,
   Palette,
   RefreshCcw,
   Save,
@@ -45,6 +46,7 @@ const defaultForm: UpdatePreferencesDto = {
     shortSessionMinutes: 10,
     longSessionMinutes: 50,
     breakSessionMinutes: 25,
+    adaptiveEnabled: true,
   },
   targets: weekdayOrder.map(({ weekday }) => ({ weekday, targetMinutes: 90 })),
 }
@@ -60,6 +62,7 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
       shortSessionMinutes: settings?.shortSessionMinutes ?? 10,
       breakSessionMinutes: settings?.breakSessionMinutes ?? 25,
       longSessionMinutes: settings?.longSessionMinutes ?? 50,
+      adaptiveEnabled: settings?.adaptiveEnabled ?? true,
     },
     targets: weekdayOrder.map(({ weekday }) => ({
       weekday,
@@ -84,6 +87,7 @@ export function SettingsPage() {
   const [isInitialized, setIsInitialized] = useState(false)
   const [showCalendarLink, setShowCalendarLink] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [downloadingReport, setDownloadingReport] = useState(false)
 
   const calendarFeedUrl = useMemo(() => {
     const base = import.meta.env.VITE_API_URL.endsWith('/')
@@ -106,6 +110,7 @@ export function SettingsPage() {
       queryClient.setQueryData(['me'], updated)
       queryClient.invalidateQueries({ queryKey: ['streak'] })
       queryClient.invalidateQueries({ queryKey: ['productivity'] })
+      queryClient.invalidateQueries({ queryKey: ['timer-recommendation'] })
       setForm(createFormFromMe(updated))
       toast({
         variant: 'success',
@@ -199,6 +204,44 @@ export function SettingsPage() {
         title: 'Copy failed',
         description: 'Clipboard permission denied. Copy manually from the field.',
       })
+    }
+  }
+
+  const handleDownloadReport = async () => {
+    const base = import.meta.env.VITE_API_URL.endsWith('/')
+      ? import.meta.env.VITE_API_URL.slice(0, -1)
+      : import.meta.env.VITE_API_URL
+    const url = `${base}/reports/study.pdf`
+
+    setDownloadingReport(true)
+    try {
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`Report request failed (${response.status})`)
+      }
+      const blob = await response.blob()
+      const downloadUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = 'swot-study-report.pdf'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(downloadUrl)
+
+      toast({
+        variant: 'success',
+        title: 'Report ready',
+        description: 'Study report PDF downloaded successfully.',
+      })
+    } catch {
+      toast({
+        variant: 'error',
+        title: 'Download failed',
+        description: 'Could not generate study report right now.',
+      })
+    } finally {
+      setDownloadingReport(false)
     }
   }
 
@@ -321,6 +364,35 @@ export function SettingsPage() {
                 )}
               </button>
             </div>
+            <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+              <p className="text-sm font-semibold">Adaptive Pomodoro</p>
+              <button
+                type="button"
+                className="mt-3 inline-flex h-10 items-center gap-2 rounded-md border border-input px-3 text-sm"
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      adaptiveEnabled: !(current.settings.adaptiveEnabled ?? true),
+                    },
+                  }))
+                }
+              >
+                {(form.settings.adaptiveEnabled ?? true) ? (
+                  <>
+                    <Check className="h-4 w-4 text-primary" /> Enabled
+                  </>
+                ) : (
+                  <>
+                    <TriangleAlert className="h-4 w-4 text-muted-foreground" /> Disabled
+                  </>
+                )}
+              </button>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Automatically adjusts focus duration based on recent completion and break patterns.
+              </p>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -428,6 +500,19 @@ export function SettingsPage() {
                   </Button>
                 </>
               ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+            <p className="text-sm font-semibold">Study Report</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Download a full PDF report with totals, streak stats, course breakdown, charts, and recent sessions.
+            </p>
+            <div className="mt-3">
+              <Button onClick={handleDownloadReport} disabled={downloadingReport}>
+                <FileDown className="h-4 w-4" />
+                {downloadingReport ? 'Generating report...' : 'Download Study Report'}
+              </Button>
             </div>
           </div>
 

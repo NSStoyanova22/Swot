@@ -1,6 +1,6 @@
 # SWOT — Study Tracker Project Context
 
-## Project Overview
+## Project Overview 🎯
 Swot is a personal study tracking web application similar to Attenify but with more advanced analytics, productivity insights, and customization.
 
 Goal:
@@ -14,47 +14,47 @@ Single-user mode (no authentication yet).
 
 ---
 
-## Tech Stack
+## Tech Stack 🛠️
 
-### Frontend
+### Frontend 💻
 - React + TypeScript
 - Vite
 - TailwindCSS
 - shadcn/ui components
-- React Router
+- Framer Motion
 - React Query (@tanstack/react-query)
-- Pink themed design system
+- Theming via CSS variables (pink, purple, dark, minimal)
 
-### Backend
+### Backend ⚙️
 - Node.js + TypeScript
 - Fastify API
 - Prisma ORM
 - MySQL database
 
-### Architecture
+### Architecture 🧱
 - Monorepo structure
   - apps/web → frontend
   - apps/api → backend
 
 ---
 
-## Local Development
+## Local Development 🧪
 
-### Frontend
+### Frontend 🌐
 - http://localhost:5173
 
-### Backend API
+### Backend API 🔌
 - http://localhost:4000
 
-### Database
+### Database 🗄️
 - MySQL local
 - Database: swot_db
 
 ---
 
-## Current Features Implemented
+## Current Features Implemented ✅
 
-### Backend
+### Backend ⚙️
 - Fastify API
 - Prisma schema + migrations
 - Seed data
@@ -65,7 +65,7 @@ Single-user mode (no authentication yet).
   - StudySession
   - Settings
   - DailyTarget
-- Endpoints:
+- Endpoints 🛣️:
   - GET /health
   - GET /me
   - GET /courses
@@ -74,25 +74,53 @@ Single-user mode (no authentication yet).
   - POST /activities
   - GET /sessions
   - POST /sessions
+  - GET /analytics/insights
+  - GET /analytics/prediction
+  - GET /timer/recommendation
+  - GET /reports/study.pdf
+  - GET /calendar.ics
+  - GET /distractions/analytics
 
-### Frontend
-- Base layout
-- Sidebar navigation
-- Pink theme UI
-- Dashboard shell
+- Services 🧠:
+  - Streak engine with cutoff-aware day boundaries
+  - Productivity scoring (daily + weekly trend)
+  - Deterministic AI-style insights engine
+  - Study habit prediction (heuristic)
+  - Adaptive Pomodoro duration recommendation
+  - PDF report generation
+  - Achievements + medals logic
+  - Calendar feed export (.ics)
+
+### Frontend 🎨
+- App layout (left sidebar + top header + main content)
+- Collapsible sidebar
+- Command palette (Cmd/Ctrl+K)
+- Keyboard shortcuts guide
+- Theme switcher and persisted themes
+- Motion system (page transitions, hover effects, loading transitions)
 - API client
 - React Query integration
+- Offline session queue + sync status
 
-### Product Features
-- Session logging
-- Study sessions tracking
-- Courses + activities
-- Dashboard
-- Study planner / scheduling system (Prompt 22 completed)
+### Product Features ✨
+- Dashboard with analytics tiles, charts, streak heatmap, and prediction card 📊
+- Sessions table + log/edit flow with optimistic updates 📝
+- Pomodoro timer + manual study timer + adaptive duration recommendation ⏱️
+- Focus sounds panel (white noise, rain, cafe, brown noise, optional YouTube lo-fi) 🎧
+- Courses and activities CRUD with color chips 🎓
+- Calendar monthly view + day details + add/edit sessions 📅
+- Achievements page (earned vs locked states) and medals logic 🏅
+- Insights page with lock state (< 5 sessions) and analytics cards 🔍
+- Distraction tracking + distraction analytics 🚫
+- Study planner with planned vs actual tracking 🗓️
+- Rich text/markdown notes support and search 📓
+- Global search across sessions/courses/notes 🔎
+- iCal feed export and PDF study report export 📤
+- Dashboard customization (drag/drop widgets and persisted layout) 🧩
 
 ---
 
-## Features Implemented From Prompt System
+## Features Implemented From Prompt System 📌
 Completed prompts:
 1 — Monorepo setup (manual)
 2 — Web base UI + theme
@@ -116,22 +144,29 @@ Completed prompts:
 20 — Distraction tracker
 21 — Goals system
 22 — Study planner
+23 — Rich notes + note search
+24 — Global search + command palette
+25 — Offline support + sync status
+26 — Motion system + advanced themes
+27 — Dashboard customization + keyboard shortcuts
+28 — Focus music + noise generator
+29 — Deterministic AI-style insights endpoint
+30 — Adaptive Pomodoro durations
+31 — Study habit prediction
+32 — Study report PDF export
 
 ---
 
-## Next Planned Features
-- Dashboard customization
-- Command palette
-- Motion/animations
-- Offline sync
-- AI study insights
-- Advanced analytics
+## Next Planned Features 🚀
 - Mobile responsiveness
 - Deployment
+- Authentication / multi-user mode
+- Test coverage expansion (API + UI integration)
+- Performance profiling for heavy dashboard views
 
 ---
 
-## Data Rules
+## Data Rules 📐
 - Store timestamps in UTC
 - Apply user cutoffTime when grouping sessions
 - Prisma manages schema migrations
@@ -139,7 +174,7 @@ Completed prompts:
 
 ---
 
-## Important Decisions
+## Important Decisions 🧭
 - Single-user mode first (no auth)
 - API-first architecture
 - Pink theme default
@@ -148,5 +183,5 @@ Completed prompts:
 
 ---
 
-## Current Goal
-Continue building advanced productivity features and premium UX.
+## Current Goal 🏁
+Stabilize advanced features, improve reliability/performance, and prepare for production deployment.

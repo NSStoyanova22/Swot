@@ -2,12 +2,16 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import "dotenv/config";
 import { ensureAchievementsTable, recomputeAndStoreAchievements } from "./achievements.js";
+import { getAnalyticsPrediction } from "./analytics-prediction.js";
 import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
+import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
 import { ensureProductivityTables, getProductivityOverview, recomputeAndStoreProductivity } from "./productivity.js";
+import { generateStudyReportPdf } from "./reports.js";
 import { routes } from "./routes.js";
 import { ensureStreakTables, getStreakOverview, recomputeAndStoreStreak } from "./streak.js";
+import { ensureAdaptiveTimerTables, getAdaptiveEnabled, getTimerRecommendation, setAdaptiveEnabled } from "./timer-adaptive.js";
 
 const app = Fastify({ logger: true });
 
@@ -17,6 +21,7 @@ await ensureStreakTables();
 await ensureProductivityTables();
 await ensureDistractionTables();
 await ensurePlannerTables();
+await ensureAdaptiveTimerTables();
 
 app.get("/health", async () => ({ ok: true, name: "Swot API" }));
 
@@ -41,10 +46,22 @@ function toIcsDateUtc(date: Date) {
 }
 
 app.get("/me", async () => {
-  return prisma.user.findUnique({
+  const me = await prisma.user.findUnique({
     where: { id: USER_ID },
     include: { settings: true, targets: true },
   });
+  if (!me) return me;
+
+  const adaptiveEnabled = await getAdaptiveEnabled(USER_ID);
+  return {
+    ...me,
+    settings: me.settings
+      ? {
+          ...me.settings,
+          adaptiveEnabled,
+        }
+      : null,
+  };
 });
 
 app.get("/achievements", async () => {
@@ -59,10 +76,30 @@ app.get("/productivity", async () => {
   return getProductivityOverview(USER_ID);
 });
 
+app.get("/timer/recommendation", async () => {
+  return getTimerRecommendation(USER_ID);
+});
+
 app.get("/distractions/analytics", async (req) => {
   const query = req.query as { days?: string };
   const days = query.days ? Number(query.days) : 30;
   return getDistractionAnalytics(USER_ID, days);
+});
+
+app.get("/analytics/insights", async () => {
+  return getAnalyticsInsights(USER_ID);
+});
+
+app.get("/analytics/prediction", async () => {
+  return getAnalyticsPrediction(USER_ID);
+});
+
+app.get("/reports/study.pdf", async (_req, reply) => {
+  const bytes = await generateStudyReportPdf(USER_ID);
+  reply
+    .header("Content-Type", "application/pdf")
+    .header("Content-Disposition", 'attachment; filename="swot-study-report.pdf"')
+    .send(Buffer.from(bytes));
 });
 
 app.get("/calendar.ics", async (_req, reply) => {
@@ -114,6 +151,7 @@ app.put("/me/preferences", async (req, reply) => {
       shortSessionMinutes?: number;
       longSessionMinutes?: number;
       breakSessionMinutes?: number;
+      adaptiveEnabled?: boolean;
     };
     targets?: Array<{ weekday: number; targetMinutes: number }>;
   };
@@ -134,6 +172,11 @@ app.put("/me/preferences", async (req, reply) => {
   const shortSessionMinutes = Number(settings.shortSessionMinutes);
   const longSessionMinutes = Number(settings.longSessionMinutes);
   const breakSessionMinutes = Number(settings.breakSessionMinutes);
+  const adaptiveEnabled = settings.adaptiveEnabled ?? true;
+
+  if (typeof adaptiveEnabled !== "boolean") {
+    return reply.code(400).send({ error: "adaptiveEnabled must be a boolean." });
+  }
 
   const durationValues = [shortSessionMinutes, longSessionMinutes, breakSessionMinutes];
   const hasInvalidDuration = durationValues.some(
@@ -197,14 +240,25 @@ app.put("/me/preferences", async (req, reply) => {
     }
   });
 
+  await setAdaptiveEnabled(USER_ID, adaptiveEnabled);
+
   await recomputeAndStoreAchievements(USER_ID);
   await recomputeAndStoreStreak(USER_ID);
   await recomputeAndStoreProductivity(USER_ID);
-
-  return prisma.user.findUnique({
+  const me = await prisma.user.findUnique({
     where: { id: USER_ID },
     include: { settings: true, targets: true },
   });
+  if (!me) return me;
+  return {
+    ...me,
+    settings: me.settings
+      ? {
+          ...me.settings,
+          adaptiveEnabled,
+        }
+      : null,
+  };
 });
 
 await app.register(routes);

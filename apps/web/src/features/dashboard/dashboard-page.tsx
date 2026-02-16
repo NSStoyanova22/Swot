@@ -10,6 +10,7 @@ import {
   Medal,
   Plus,
   Save,
+  Sparkles,
   Timer,
   X,
 } from 'lucide-react'
@@ -30,6 +31,7 @@ import {
 } from 'recharts'
 
 import { getActivities } from '@/api/activities'
+import { getAnalyticsPrediction } from '@/api/analytics'
 import { getDistractionAnalytics } from '@/api/distractions'
 import { getMe } from '@/api/me'
 import { getProductivityOverview } from '@/api/productivity'
@@ -55,6 +57,7 @@ type WidgetId =
   | 'month'
   | 'streak'
   | 'productivity'
+  | 'prediction'
   | 'medals'
   | 'focusInsights'
   | 'heatmap'
@@ -68,6 +71,7 @@ const defaultWidgetOrder: WidgetId[] = [
   'month',
   'streak',
   'productivity',
+  'prediction',
   'medals',
   'focusInsights',
   'heatmap',
@@ -82,6 +86,7 @@ const defaultWidgetEnabled: Record<WidgetId, boolean> = {
   month: true,
   streak: true,
   productivity: true,
+  prediction: true,
   medals: true,
   focusInsights: true,
   heatmap: true,
@@ -96,6 +101,7 @@ const widgetLabel: Record<WidgetId, string> = {
   month: 'Month Minutes',
   streak: 'Streak',
   productivity: 'Productivity',
+  prediction: 'Tomorrow Prediction',
   medals: 'Medals',
   focusInsights: 'Focus Insights',
   heatmap: 'Study Heatmap',
@@ -110,6 +116,7 @@ const widgetSpanClass: Record<WidgetId, string> = {
   month: 'md:col-span-1 xl:col-span-1',
   streak: 'md:col-span-1 xl:col-span-1',
   productivity: 'md:col-span-1 xl:col-span-1',
+  prediction: 'md:col-span-1 xl:col-span-1',
   medals: 'md:col-span-1 xl:col-span-1',
   focusInsights: 'md:col-span-2 xl:col-span-3',
   heatmap: 'md:col-span-2 xl:col-span-6',
@@ -285,6 +292,10 @@ export function DashboardPage() {
   const productivityQuery = useQuery({
     queryKey: ['productivity'],
     queryFn: ({ signal }) => getProductivityOverview(signal),
+  })
+  const predictionQuery = useQuery({
+    queryKey: ['analytics-prediction'],
+    queryFn: ({ signal }) => getAnalyticsPrediction(signal),
   })
   const distractionQuery = useQuery({
     queryKey: ['distractions-analytics'],
@@ -548,6 +559,30 @@ export function DashboardPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               {productivityQuery.data?.explanation.summary ?? 'Productivity score updates from your sessions.'}
+            </p>
+          </div>
+        }
+      />
+    ),
+    prediction: (
+      <Tile
+        title="Tomorrow Prediction"
+        value={formatMinutes(predictionQuery.data?.predictedMinutes ?? 0)}
+        description={`Study probability: ${Math.round((predictionQuery.data?.studyProbability ?? 0) * 100)}%`}
+        icon={Sparkles}
+        extra={
+          <div className="space-y-1">
+            <div className="h-2 rounded-full bg-secondary">
+              <div
+                className="h-2 rounded-full bg-primary transition-all"
+                style={{ width: `${Math.round((predictionQuery.data?.studyProbability ?? 0) * 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Confidence {predictionQuery.data?.confidenceScore ?? 0}/100
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {predictionQuery.data?.explanation ?? 'Prediction adapts as your study pattern evolves.'}
             </p>
           </div>
         }

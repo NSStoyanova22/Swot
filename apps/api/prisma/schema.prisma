@@ -75,6 +75,7 @@ model Settings {
   shortSessionMinutes Int      @default(25)
   longSessionMinutes  Int      @default(50)
   breakSessionMinutes Int      @default(5)
+  adaptiveEnabled     Boolean  @default(true) @map("adaptive_enabled")
   createdAt           DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
