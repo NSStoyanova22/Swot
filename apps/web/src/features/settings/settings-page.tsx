@@ -50,6 +50,22 @@ const defaultForm: UpdatePreferencesDto = {
     longSessionMinutes: 50,
     breakSessionMinutes: 25,
     adaptiveEnabled: true,
+    riskEnabled: true,
+    riskThresholdMode: 'score',
+    riskScoreThreshold: 70,
+    riskGradeThresholdByScale: {
+      bulgarian: 4.5,
+      german: 3.5,
+      percentage: 70,
+    },
+    riskLookback: 'currentTerm',
+    riskMinDataPoints: 2,
+    riskUseTermFinalIfAvailable: true,
+    riskShowOnlyIfBelowThreshold: true,
+    celebrationEnabled: true,
+    celebrationScoreThreshold: 90,
+    celebrationCooldownHours: 24,
+    celebrationShowFor: 'all',
   },
   targets: weekdayOrder.map(({ weekday }) => ({ weekday, targetMinutes: 90 })),
   uiPreferences: {
@@ -77,6 +93,22 @@ function createFormFromMe(meData: Awaited<ReturnType<typeof getMe>>): UpdatePref
       breakSessionMinutes: settings?.breakSessionMinutes ?? 25,
       longSessionMinutes: settings?.longSessionMinutes ?? 50,
       adaptiveEnabled: settings?.adaptiveEnabled ?? true,
+      riskEnabled: settings?.riskEnabled ?? true,
+      riskThresholdMode: settings?.riskThresholdMode ?? 'score',
+      riskScoreThreshold: settings?.riskScoreThreshold ?? 70,
+      riskGradeThresholdByScale: {
+        bulgarian: settings?.riskGradeThresholdByScale?.bulgarian ?? 4.5,
+        german: settings?.riskGradeThresholdByScale?.german ?? 3.5,
+        percentage: settings?.riskGradeThresholdByScale?.percentage ?? 70,
+      },
+      riskLookback: settings?.riskLookback ?? 'currentTerm',
+      riskMinDataPoints: settings?.riskMinDataPoints ?? 2,
+      riskUseTermFinalIfAvailable: settings?.riskUseTermFinalIfAvailable ?? true,
+      riskShowOnlyIfBelowThreshold: settings?.riskShowOnlyIfBelowThreshold ?? true,
+      celebrationEnabled: settings?.celebrationEnabled ?? true,
+      celebrationScoreThreshold: settings?.celebrationScoreThreshold ?? 90,
+      celebrationCooldownHours: settings?.celebrationCooldownHours ?? 24,
+      celebrationShowFor: settings?.celebrationShowFor ?? 'all',
     },
     targets: weekdayOrder.map(({ weekday }) => ({
       weekday,
@@ -176,6 +208,22 @@ export function SettingsPage() {
     const invalidTarget = form.targets.some((item) => !Number.isFinite(item.targetMinutes) || item.targetMinutes < 0)
     if (invalidTarget) {
       return 'Daily targets must be 0 or greater.'
+    }
+
+    if (!Number.isFinite(form.settings.riskScoreThreshold ?? 0)) {
+      return 'Risk score threshold must be a number.'
+    }
+    if ((form.settings.riskScoreThreshold ?? 0) < 0 || (form.settings.riskScoreThreshold ?? 0) > 100) {
+      return 'Risk score threshold must be between 0 and 100.'
+    }
+    if (!Number.isFinite(form.settings.riskMinDataPoints ?? 0) || (form.settings.riskMinDataPoints ?? 0) < 1) {
+      return 'Risk minimum data points must be at least 1.'
+    }
+    if (!Number.isFinite(form.settings.celebrationScoreThreshold ?? 0) || (form.settings.celebrationScoreThreshold ?? 0) < 0 || (form.settings.celebrationScoreThreshold ?? 0) > 100) {
+      return 'Celebration score threshold must be between 0 and 100.'
+    }
+    if (!Number.isFinite(form.settings.celebrationCooldownHours ?? 0) || (form.settings.celebrationCooldownHours ?? 0) < 1) {
+      return 'Celebration cooldown must be at least 1 hour.'
     }
 
     return null
@@ -430,6 +478,289 @@ export function SettingsPage() {
               <p className="mt-2 text-xs text-muted-foreground">
                 Automatically adjusts focus duration based on recent completion and break patterns.
               </p>
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-lg border border-border/70 bg-background/70 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Grades Risk / Needs Attention</p>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-input px-3 text-sm"
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: { ...current.settings, riskEnabled: !(current.settings.riskEnabled ?? true) },
+                  }))
+                }
+              >
+                {(form.settings.riskEnabled ?? true) ? (
+                  <>
+                    <Check className="h-4 w-4 text-primary" /> Enabled
+                  </>
+                ) : (
+                  <>
+                    <TriangleAlert className="h-4 w-4 text-muted-foreground" /> Disabled
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Threshold mode</span>
+                <select
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.settings.riskThresholdMode ?? 'score'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: { ...current.settings, riskThresholdMode: event.target.value as 'score' | 'grade' },
+                    }))
+                  }
+                >
+                  <option value="score">Score (0-100)</option>
+                  <option value="grade">Grade scale value</option>
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Lookback</span>
+                <select
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.settings.riskLookback ?? 'currentTerm'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        riskLookback: event.target.value as 'currentTerm' | 'previousTerm' | 'academicYear',
+                      },
+                    }))
+                  }
+                >
+                  <option value="currentTerm">Current term</option>
+                  <option value="previousTerm">Previous term</option>
+                  <option value="academicYear">Academic year</option>
+                </select>
+              </label>
+            </div>
+            {(form.settings.riskThresholdMode ?? 'score') === 'score' ? (
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Risk score threshold</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.settings.riskScoreThreshold ?? 70}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        riskScoreThreshold: Number(event.target.value || 0),
+                      },
+                    }))
+                  }
+                />
+              </label>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">Bulgarian</span>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min={2}
+                    max={6}
+                    value={form.settings.riskGradeThresholdByScale?.bulgarian ?? 4.5}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          riskGradeThresholdByScale: {
+                            ...(current.settings.riskGradeThresholdByScale ?? { bulgarian: 4.5, german: 3.5, percentage: 70 }),
+                            bulgarian: Number(event.target.value || 0),
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">German</span>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min={1}
+                    max={6}
+                    value={form.settings.riskGradeThresholdByScale?.german ?? 3.5}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          riskGradeThresholdByScale: {
+                            ...(current.settings.riskGradeThresholdByScale ?? { bulgarian: 4.5, german: 3.5, percentage: 70 }),
+                            german: Number(event.target.value || 0),
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">Percentage</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={form.settings.riskGradeThresholdByScale?.percentage ?? 70}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        settings: {
+                          ...current.settings,
+                          riskGradeThresholdByScale: {
+                            ...(current.settings.riskGradeThresholdByScale ?? { bulgarian: 4.5, german: 3.5, percentage: 70 }),
+                            percentage: Number(event.target.value || 0),
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Min data points</span>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.settings.riskMinDataPoints ?? 2}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        riskMinDataPoints: Number(event.target.value || 1),
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Prefer term final</span>
+                <button
+                  type="button"
+                  className="inline-flex h-10 items-center justify-center rounded-md border border-input px-3 text-sm"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        riskUseTermFinalIfAvailable: !(current.settings.riskUseTermFinalIfAvailable ?? true),
+                      },
+                    }))
+                  }
+                >
+                  {(form.settings.riskUseTermFinalIfAvailable ?? true) ? 'Yes' : 'No'}
+                </button>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Show only below threshold</span>
+                <button
+                  type="button"
+                  className="inline-flex h-10 items-center justify-center rounded-md border border-input px-3 text-sm"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        riskShowOnlyIfBelowThreshold: !(current.settings.riskShowOnlyIfBelowThreshold ?? true),
+                      },
+                    }))
+                  }
+                >
+                  {(form.settings.riskShowOnlyIfBelowThreshold ?? true) ? 'Yes' : 'No'}
+                </button>
+              </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Celebrations enabled</span>
+                <button
+                  type="button"
+                  className="inline-flex h-10 items-center justify-center rounded-md border border-input px-3 text-sm"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        celebrationEnabled: !(current.settings.celebrationEnabled ?? true),
+                      },
+                    }))
+                  }
+                >
+                  {(form.settings.celebrationEnabled ?? true) ? 'Yes' : 'No'}
+                </button>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Celebrate for</span>
+                <select
+                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.settings.celebrationShowFor ?? 'all'}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        celebrationShowFor: event.target.value as 'gradeItem' | 'termFinal' | 'courseAverage' | 'all',
+                      },
+                    }))
+                  }
+                >
+                  <option value="all">All triggers</option>
+                  <option value="gradeItem">Grade items</option>
+                  <option value="termFinal">Term finals</option>
+                  <option value="courseAverage">Course average crossing</option>
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Celebration score threshold</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={form.settings.celebrationScoreThreshold ?? 90}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        celebrationScoreThreshold: Number(event.target.value || 0),
+                      },
+                    }))
+                  }
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">Cooldown (hours)</span>
+                <Input
+                  type="number"
+                  min={1}
+                  value={form.settings.celebrationCooldownHours ?? 24}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      settings: {
+                        ...current.settings,
+                        celebrationCooldownHours: Number(event.target.value || 1),
+                      },
+                    }))
+                  }
+                />
+              </label>
             </div>
           </div>
 

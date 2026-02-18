@@ -58,6 +58,22 @@ export type SettingsDto = {
   longSessionMinutes: number
   breakSessionMinutes: number
   adaptiveEnabled?: boolean
+  riskEnabled?: boolean
+  riskThresholdMode?: 'score' | 'grade'
+  riskScoreThreshold?: number
+  riskGradeThresholdByScale?: {
+    bulgarian?: number
+    german?: number
+    percentage?: number
+  }
+  riskLookback?: 'currentTerm' | 'previousTerm' | 'academicYear'
+  riskMinDataPoints?: number
+  riskUseTermFinalIfAvailable?: boolean
+  riskShowOnlyIfBelowThreshold?: boolean
+  celebrationEnabled?: boolean
+  celebrationScoreThreshold?: number
+  celebrationCooldownHours?: number
+  celebrationShowFor?: 'gradeItem' | 'termFinal' | 'courseAverage' | 'all'
   createdAt: string
 }
 
@@ -76,6 +92,7 @@ export type MeDto = {
   settings: SettingsDto | null
   targets: DailyTargetDto[]
   uiPreferences: UiPreferencesDto
+  ignoredShkoloSubjects?: string[]
 }
 
 export type UiPreferencesDto = {
@@ -96,12 +113,29 @@ export type UpdatePreferencesDto = {
     longSessionMinutes: number
     breakSessionMinutes: number
     adaptiveEnabled?: boolean
+    riskEnabled?: boolean
+    riskThresholdMode?: 'score' | 'grade'
+    riskScoreThreshold?: number
+    riskGradeThresholdByScale?: {
+      bulgarian?: number
+      german?: number
+      percentage?: number
+    }
+    riskLookback?: 'currentTerm' | 'previousTerm' | 'academicYear'
+    riskMinDataPoints?: number
+    riskUseTermFinalIfAvailable?: boolean
+    riskShowOnlyIfBelowThreshold?: boolean
+    celebrationEnabled?: boolean
+    celebrationScoreThreshold?: number
+    celebrationCooldownHours?: number
+    celebrationShowFor?: 'gradeItem' | 'termFinal' | 'courseAverage' | 'all'
   }
   targets: Array<{
     weekday: number
     targetMinutes: number
   }>
   uiPreferences?: Partial<UiPreferencesDto>
+  ignoredShkoloSubjects?: string[]
 }
 
 export type TimerRecommendationDto = {
@@ -286,6 +320,13 @@ export type ShkoloRowDto = {
   currentGrades: number[]
   term1: number | null
   term2: number | null
+  t1CurrentGrades?: number[]
+  t2CurrentGrades?: number[]
+  t1FinalGrade?: number | null
+  t2FinalGrade?: number | null
+  yearFinalGrade?: number | null
+  rawRowText?: string
+  parseWarnings?: string[]
 }
 
 export type ShkoloPdfImportResultDto = {
@@ -293,8 +334,21 @@ export type ShkoloPdfImportResultDto = {
   detectedYear: string | null
   rows: ShkoloRowDto[]
   skippedLines: number
+  parseWarnings?: string[]
   debug?: {
     rawSamples: string[]
+    pagesText?: Array<{
+      page: number
+      text: string
+    }>
+    pageItems?: Record<string, Array<{
+      page: number
+      str: string
+      x: number
+      y: number
+      width: number
+      height: number
+    }>>
     usedOcrFallback: boolean
     scannedThreshold: number
     totalExtractedLength: number
@@ -308,18 +362,24 @@ export type ShkoloPdfImportResultDto = {
       digits: number
       total: number
     }>
+    ignoredShkoloSubjects?: string[]
+    filteredOutCount?: number
   }
 }
 
 export type GradeCourseSummaryDto = {
   courseId: string
   courseName: string
+  averageValue: number
   averageScore: number
+  averageNormalizedScore: number | null
   itemCount: number
 }
 
 export type GradeCourseTrendDto = GradeCourseSummaryDto & {
+  previousAverageValue: number | null
   previousAverageScore: number | null
+  previousAverageNormalizedScore: number | null
   delta: number | null
 }
 
@@ -327,8 +387,13 @@ export type GradesSummaryDto = {
   termId: string | null
   termName?: string
   schoolYear?: string
+  displayScale: GradeScale
+  includeTermGrade: boolean
+  method: string
   overallAverage: number | null
+  overallAverageNormalized: number | null
   previousTermAverage: number | null
+  previousTermAverageNormalized: number | null
   deltaFromPrevious: number | null
   bestCourses: GradeCourseSummaryDto[]
   worstCourses: GradeCourseSummaryDto[]
@@ -350,6 +415,10 @@ export type CourseGradeTargetDto = {
 export type StudyRecommendationDto = {
   courseId: string
   courseName: string
+  displayScale: GradeScale
+  gradeBand: 'atRisk' | 'watch' | 'good' | 'excellent'
+  averageValue: number | null
+  averageNormalized: number | null
   attentionScore: number
   recommendedMinutes: number
   reasons: string[]
@@ -362,6 +431,8 @@ export type AcademicRiskDto = {
   courseName: string
   riskScore: number
   riskLevel: AcademicRiskLevel
+  gradeBand: 'atRisk' | 'watch' | 'good' | 'excellent'
+  displayScale: GradeScale
   reasons: string[]
   suggestedActions: string[]
   recommendedMinutes: number
@@ -369,7 +440,23 @@ export type AcademicRiskDto = {
   upcomingDeadlines: number
   upcomingExams: number
   currentAverage: number | null
+  currentAverageNormalized: number | null
   deltaFromPrevious: number | null
+}
+
+export type CelebrationStateDto = {
+  settings: {
+    celebrationEnabled: boolean
+    celebrationScoreThreshold: number
+    celebrationCooldownHours: number
+    celebrationShowFor: 'gradeItem' | 'termFinal' | 'courseAverage' | 'all'
+  }
+  records: Array<{
+    courseId: string
+    lastCelebratedAt: string
+    lastCelebratedScore: number | null
+    lastCelebratedType: string | null
+  }>
 }
 
 export type CreateActivityDto = {

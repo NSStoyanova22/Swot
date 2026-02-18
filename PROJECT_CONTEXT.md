@@ -80,6 +80,9 @@ Single-user mode (no authentication yet).
   - GET /reports/study.pdf
   - GET /calendar.ics
   - GET /distractions/analytics
+  - POST /grades/import-shkolo-pdf
+  - POST /grades/bulk
+  - PUT /me/preferences (extended with ignored Shkolo subjects)
 
 - Services 🧠:
   - Streak engine with cutoff-aware day boundaries
@@ -90,6 +93,10 @@ Single-user mode (no authentication yet).
   - PDF report generation
   - Achievements + medals logic
   - Calendar feed export (.ics)
+  - Shkolo PDF import pipeline (text-first extraction + OCR fallback for scanned PDFs)
+  - Bulgarian-grade parser with subject block parsing across wrapped lines/pages
+  - Heuristic term final detection (term1/term2/year + confidence/debug diagnostics)
+  - Persistent ignored-subject preferences for Shkolo imports
 
 ### Frontend 🎨
 - App layout (left sidebar + top header + main content)
@@ -101,6 +108,7 @@ Single-user mode (no authentication yet).
 - API client
 - React Query integration
 - Offline session queue + sync status
+- Grades import preview workflow for Shkolo PDF with editable rows and save mapping
 
 ### Product Features ✨
 - Dashboard with analytics tiles, charts, streak heatmap, and prediction card 📊
@@ -117,6 +125,11 @@ Single-user mode (no authentication yet).
 - Global search across sessions/courses/notes 🔎
 - iCal feed export and PDF study report export 📤
 - Dashboard customization (drag/drop widgets and persisted layout) 🧩
+- Shkolo PDF import with review table (editable extracted subject, course matching, finals/current grade controls) 📄
+- Inline course creation during Shkolo review (create + assign from row) ➕
+- Row removal/ignore during import with counters (parsed/removed/skipped/ready) 🧹
+- “Always ignore this subject” support persisted in user preferences and auto-filtered on future imports 🚫
+- Import metadata persisted on created grade items (`importType`, `fileName`, `importedAt`) 🏷️
 
 ---
 
@@ -156,7 +169,7 @@ Completed prompts:
 32 — Study report PDF export
 
 ---
-
+    
 ## Next Planned Features 🚀
 - Mobile responsiveness
 - Deployment

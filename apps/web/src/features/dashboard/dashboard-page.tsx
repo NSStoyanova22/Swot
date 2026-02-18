@@ -681,7 +681,7 @@ export function DashboardPage() {
       />
     ),
     focusInsights: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
         <CardHeader>
           <CardTitle>🎯 Focus Insights</CardTitle>
           <CardDescription>
@@ -805,9 +805,9 @@ export function DashboardPage() {
             {productivityQuery.data?.explanation.breaks ?? 0}.
           </CardDescription>
         </CardHeader>
-        <CardContent className="h-[220px]">
+        <CardContent className="h-[220px] min-w-0">
           {productivityQuery.data?.weeklyTrend.length ? (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
+            <ResponsiveContainer width="100%" height={180} minWidth={0} minHeight={180}>
               <AreaChart data={productivityQuery.data.weeklyTrend}>
                 <defs>
                   <linearGradient id="productivityFill" x1="0" y1="0" x2="0" y2="1">
@@ -855,16 +855,16 @@ export function DashboardPage() {
       </Card>
     ),
     courseChart: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
         <CardHeader>
           <CardTitle>📚 Minutes by Course</CardTitle>
           <CardDescription>Distribution of focused time across your subjects.</CardDescription>
         </CardHeader>
-        <CardContent className="h-[320px]">
+        <CardContent className="h-[320px] min-w-0">
           {!hasData ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to visualize.</p>
           ) : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
+            <ResponsiveContainer width="100%" height={240} minWidth={0} minHeight={240}>
               <PieChart>
                 <Pie
                   data={metrics.courseChart}
@@ -887,16 +887,16 @@ export function DashboardPage() {
       </Card>
     ),
     timeAnalysis: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
         <CardHeader>
           <CardTitle>⏰ Time Analysis</CardTitle>
           <CardDescription>Minutes by day of week based on your logged sessions.</CardDescription>
         </CardHeader>
-        <CardContent className="h-[320px]">
+        <CardContent className="h-[320px] min-w-0">
           {!hasData ? (
             <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No sessions yet to analyze.</p>
           ) : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
+            <ResponsiveContainer width="100%" height={240} minWidth={0} minHeight={240}>
               <BarChart data={metrics.weekChart} barCategoryGap={18}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--chart-grid))" />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} />

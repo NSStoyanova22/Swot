@@ -10,7 +10,22 @@ import {
   getFocusGardenOverview,
   upsertFocusGardenGrowthFromSession,
 } from "./focus-garden.js";
-import { getIgnoredShkoloSubjects, normalizeGradeScale, toPerformanceScore, type GradeScale } from "./grades.js";
+import {
+  computeCourseAverage,
+  fromPerformanceScore,
+  getCelebrationSettings,
+  getCourseCelebrationRecords,
+  getGradeRiskSettings,
+  getGradeBand,
+  getIgnoredShkoloSubjects,
+  normalizeGradeScale,
+  recordCourseCelebration,
+  shouldSuppressAttentionForExcellent,
+  toPerformanceScore,
+  type CelebrationShowFor,
+  type GradeAverageInputItem,
+  type GradeScale,
+} from "./grades.js";
 import {
   computeNextReminderTrigger,
   type ReminderRepeatRule,
@@ -316,6 +331,41 @@ export async function routes(app: FastifyInstance) {
     });
   });
 
+  app.get("/celebrations/state", async () => {
+    const settings = await getCelebrationSettings(USER_ID);
+    const records = await getCourseCelebrationRecords(USER_ID);
+    return {
+      settings,
+      records,
+    };
+  });
+
+  app.post("/celebrations/record", async (req, reply) => {
+    const body = req.body as {
+      courseId?: string;
+      score?: number | null;
+      type?: CelebrationShowFor | "manual";
+    };
+    const courseId = body.courseId?.trim();
+    if (!courseId) {
+      return reply.code(400).send({ error: "Missing courseId." });
+    }
+    const exists = await prisma.course.findFirst({
+      where: { id: courseId, userId: USER_ID },
+      select: { id: true },
+    });
+    if (!exists) {
+      return reply.code(404).send({ error: "Course not found." });
+    }
+
+    await recordCourseCelebration(USER_ID, {
+      courseId,
+      score: body.score ?? null,
+      type: body.type ?? "manual",
+    });
+    return { ok: true };
+  });
+
   app.put("/courses/:id", async (req) => {
     const params = req.params as { id: string };
     const body = req.body as { name: string };
@@ -573,6 +623,31 @@ export async function routes(app: FastifyInstance) {
     `;
 
     return { ok: true };
+  });
+
+  app.delete("/terms/:termId/grades", async (req, reply) => {
+    const params = req.params as { termId: string };
+    const termId = Number.parseInt(String(params.termId).trim(), 10);
+    if (!Number.isFinite(termId)) {
+      return reply.code(400).send({ error: "Invalid termId." });
+    }
+
+    const termRows = await prisma.$queryRaw<Array<{ id: number }>>`
+      SELECT id
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    if (!termRows.length) {
+      return reply.code(404).send({ error: "Term not found." });
+    }
+
+    const deleted = await prisma.$executeRaw`
+      DELETE FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${termId}
+    `;
+
+    return { deletedCount: Number(deleted) };
   });
 
   // Grade categories
@@ -1024,7 +1099,9 @@ export async function routes(app: FastifyInstance) {
         "Shkolo PDF upload metadata",
       );
 
-      const pages = await extractShkoloPdfPages(bytes);
+      const extracted = await extractShkoloPdfPages(bytes, { debugEnabled });
+      const pages = extracted.pages;
+      const pageItemsByPage = extracted.pageItemsByPage ?? {};
       const extractedPageTextLengths = pages.map((page) => ({
         page: page.page,
         length: page.text.length,
@@ -1093,7 +1170,10 @@ export async function routes(app: FastifyInstance) {
         pagesForParsing = ocrPages;
       }
 
-      const parsed = parseShkoloPages(pagesForParsing);
+      const parsed = parseShkoloPages(
+        pagesForParsing,
+        usedOcrFallback ? {} : { pageItemsByPage },
+      );
       const ignoredShkoloSubjects = await getIgnoredShkoloSubjects(USER_ID);
       const ignoredSet = new Set(
         ignoredShkoloSubjects.map((value) =>
@@ -1114,12 +1194,14 @@ export async function routes(app: FastifyInstance) {
       const rawSamples = debugEnabled
         ? pagesForParsing.map((page) => page.text.slice(0, 500))
         : undefined;
+      const pagesText = debugEnabled ? pagesForParsing.map((page) => ({ page: page.page, text: page.text })) : undefined;
 
       return {
         fileName: file.filename,
         detectedYear: parsed.detectedYear,
         rows: filteredRows,
         skippedLines: parsed.skippedLines,
+        parseWarnings: parsed.parseWarnings ?? [],
         debug: rawSamples
           ? {
               rawSamples,
@@ -1128,6 +1210,8 @@ export async function routes(app: FastifyInstance) {
               totalExtractedLength,
               extractedPageTextLengths,
               ocrPageTextLengths,
+              pagesText,
+              pageItems: pageItemsByPage,
               subjectBlocks:
                 diaryParsed?.rows.map((row) => ({
                   index: row.index,
@@ -1472,32 +1556,38 @@ export async function routes(app: FastifyInstance) {
   });
 
   app.get("/recommendations/study-plan", async (req) => {
-    const query = req.query as { termId?: string; from?: string; to?: string };
+    const query = req.query as {
+      termId?: string;
+      from?: string;
+      to?: string;
+      displayScale?: string;
+      includeTermGrade?: string;
+    };
     const termId = Number(query.termId);
     if (!Number.isFinite(termId)) return [];
 
+    const displayScale = normalizeGradeScale(query.displayScale);
+    const includeTermGrade = query.includeTermGrade === "1" || query.includeTermGrade === "true";
     const toDate = query.to ? new Date(query.to) : new Date();
     const fromDate = query.from
       ? new Date(query.from)
       : new Date(toDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const upcomingEnd = new Date(toDate.getTime() + 14 * 24 * 60 * 60 * 1000);
 
     const gradeRows = await prisma.$queryRaw<
       Array<{
         course_id: string;
-        course_name: string;
-        average_score: number;
-        weighted_score: number;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        category_name: string | null;
       }>
     >`
-      SELECT
-        g.course_id,
-        c.name AS course_name,
-        AVG(g.performance_score) AS average_score,
-        (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score
+      SELECT g.course_id, g.scale, g.grade_value, g.performance_score, g.weight, gc.name AS category_name
       FROM grade_items g
-      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+      LEFT JOIN grade_categories gc ON gc.id = g.category_id
       WHERE g.user_id = ${USER_ID} AND g.term_id = ${termId}
-      GROUP BY g.course_id, c.name
     `;
 
     const trendRows = await prisma.$queryRaw<
@@ -1516,18 +1606,13 @@ export async function routes(app: FastifyInstance) {
     const studyRows = await prisma.$queryRaw<
       Array<{
         course_id: string;
-        course_name: string;
         total_minutes: number;
       }>
     >`
-      SELECT
-        s.\`courseId\` AS course_id,
-        c.name AS course_name,
-        SUM(s.\`durationMinutes\`) AS total_minutes
+      SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
       FROM \`StudySession\` s
-      INNER JOIN \`Course\` c ON BINARY c.id = BINARY s.\`courseId\`
       WHERE s.\`userId\` = ${USER_ID} AND s.\`startTime\` >= ${fromDate} AND s.\`startTime\` < ${toDate}
-      GROUP BY s.\`courseId\`, c.name
+      GROUP BY s.\`courseId\`
     `;
 
     const targetRows = await prisma.$queryRaw<
@@ -1539,169 +1624,6 @@ export async function routes(app: FastifyInstance) {
       SELECT course_id, target_score
       FROM course_grade_targets
       WHERE user_id = ${USER_ID}
-    `;
-
-    const courses = await prisma.course.findMany({
-      where: { userId: USER_ID },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    });
-
-    const gradeByCourse = new Map(
-      gradeRows.map((row) => [row.course_id, Number(row.weighted_score ?? row.average_score ?? 0)])
-    );
-    const minutesByCourse = new Map(
-      studyRows.map((row) => [row.course_id, Number(row.total_minutes ?? 0)])
-    );
-    const targetByCourse = new Map(
-      targetRows.map((row) => [row.course_id, Number(row.target_score)])
-    );
-
-    const trendByCourse = new Map<string, number>();
-    const groupedTrend = new Map<string, number[]>();
-    for (const row of trendRows) {
-      const list = groupedTrend.get(row.course_id) ?? [];
-      if (list.length < 5) list.push(Number(row.performance_score));
-      groupedTrend.set(row.course_id, list);
-    }
-    groupedTrend.forEach((scores, courseId) => {
-      if (scores.length < 2) {
-        trendByCourse.set(courseId, 0);
-        return;
-      }
-      const newest = scores[0] ?? 0;
-      const oldest = scores[scores.length - 1] ?? 0;
-      trendByCourse.set(courseId, newest - oldest);
-    });
-
-    const result = courses.map((course) => {
-      const gradeScore = gradeByCourse.get(course.id) ?? null;
-      const trend = trendByCourse.get(course.id) ?? 0;
-      const studyMinutes = minutesByCourse.get(course.id) ?? 0;
-      const targetScore = targetByCourse.get(course.id) ?? 80;
-
-      let attention = 0;
-      const reasons: string[] = [];
-
-      if (gradeScore == null) {
-        attention += 36;
-        reasons.push("No grades recorded in this term yet.");
-      } else {
-        const gradeGap = clamp(targetScore - gradeScore, 0, 50);
-        if (gradeGap > 0) {
-          attention += gradeGap * 1.2;
-          reasons.push(`Grade performance (${roundScore(gradeScore)}) is below target (${roundScore(targetScore)}).`);
-        }
-      }
-
-      if (trend < -2) {
-        attention += clamp(Math.abs(trend) * 1.25, 0, 24);
-        reasons.push("Grade trend is declining.");
-      }
-
-      const lowStudyGap = clamp(140 - studyMinutes, 0, 140);
-      if (lowStudyGap > 0) {
-        attention += (lowStudyGap / 140) * 28;
-        reasons.push(`Study time is low (${Math.round(studyMinutes)} min in last 14 days).`);
-      }
-
-      const attentionScore = clamp(Math.round(attention), 0, 100);
-      const recommendedMinutes = clamp(Math.round((80 + attentionScore * 1.6) / 15) * 15, 60, 240);
-
-      return {
-        courseId: course.id,
-        courseName: course.name,
-        attentionScore,
-        recommendedMinutes,
-        reasons: reasons.length ? reasons : ["Maintain current progress with steady study cadence."],
-      };
-    });
-
-    return result.sort((a, b) => b.attentionScore - a.attentionScore);
-  });
-
-  app.get("/analytics/academic-risk", async (req) => {
-    const query = req.query as { termId?: string; from?: string; to?: string };
-    let termId = query.termId ? Number(query.termId) : NaN;
-
-    if (!Number.isFinite(termId)) {
-      const fallbackTerm = await prisma.$queryRaw<
-        Array<{ id: number }>
-      >`
-        SELECT id
-        FROM terms
-        WHERE user_id = ${USER_ID}
-        ORDER BY school_year DESC, position DESC, id DESC
-        LIMIT 1
-      `;
-      termId = fallbackTerm[0]?.id ?? NaN;
-    }
-
-    if (!Number.isFinite(termId)) return [];
-
-    const termRows = await prisma.$queryRaw<
-      Array<{ id: number; school_year: string; position: number }>
-    >`
-      SELECT id, school_year, position
-      FROM terms
-      WHERE id = ${termId} AND user_id = ${USER_ID}
-      LIMIT 1
-    `;
-    const term = termRows[0];
-    if (!term) return [];
-
-    const previousTermRows = await prisma.$queryRaw<
-      Array<{ id: number }>
-    >`
-      SELECT id
-      FROM terms
-      WHERE user_id = ${USER_ID}
-        AND school_year = ${term.school_year}
-        AND position < ${term.position}
-      ORDER BY position DESC, id DESC
-      LIMIT 1
-    `;
-    const previousTermId = previousTermRows[0]?.id ?? null;
-
-    const toDate = query.to ? new Date(query.to) : new Date();
-    const fromDate = query.from
-      ? new Date(query.from)
-      : new Date(toDate.getTime() - 14 * 24 * 60 * 60 * 1000);
-    const upcomingEnd = new Date(toDate.getTime() + 14 * 24 * 60 * 60 * 1000);
-
-    const courses = await prisma.course.findMany({
-      where: { userId: USER_ID },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    });
-    if (!courses.length) return [];
-
-    const currentGradeRows = await prisma.$queryRaw<
-      Array<{ course_id: string; weighted_score: number | null }>
-    >`
-      SELECT course_id, (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
-      FROM grade_items
-      WHERE user_id = ${USER_ID} AND term_id = ${term.id}
-      GROUP BY course_id
-    `;
-    const previousGradeRows = previousTermId
-      ? await prisma.$queryRaw<Array<{ course_id: string; weighted_score: number | null }>>`
-          SELECT course_id, (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
-          FROM grade_items
-          WHERE user_id = ${USER_ID} AND term_id = ${previousTermId}
-          GROUP BY course_id
-        `
-      : [];
-
-    const studyRows = await prisma.$queryRaw<
-      Array<{ course_id: string; total_minutes: number | null }>
-    >`
-      SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
-      FROM \`StudySession\` s
-      WHERE s.\`userId\` = ${USER_ID}
-        AND s.\`startTime\` >= ${fromDate}
-        AND s.\`startTime\` < ${toDate}
-      GROUP BY s.\`courseId\`
     `;
 
     const deadlineRows = await prisma.$queryRaw<
@@ -1721,12 +1643,367 @@ export async function routes(app: FastifyInstance) {
       GROUP BY course_id
     `;
 
-    const currentByCourse = new Map(
-      currentGradeRows.map((row) => [row.course_id, row.weighted_score == null ? null : Number(row.weighted_score)])
+    const courses = await prisma.course.findMany({
+      where: { userId: USER_ID },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+
+    const gradeItemsByCourse = new Map<string, GradeAverageInputItem[]>();
+    for (const row of gradeRows) {
+      const list = gradeItemsByCourse.get(row.course_id) ?? [];
+      list.push({
+        scale: normalizeGradeScale(row.scale),
+        gradeValue: Number(row.grade_value),
+        performanceScore: Number(row.performance_score),
+        weight: Number(row.weight),
+        categoryName: row.category_name,
+      });
+      gradeItemsByCourse.set(row.course_id, list);
+    }
+    const minutesByCourse = new Map(
+      studyRows.map((row) => [row.course_id, Number(row.total_minutes ?? 0)])
     );
-    const previousByCourse = new Map(
-      previousGradeRows.map((row) => [row.course_id, row.weighted_score == null ? null : Number(row.weighted_score)])
+    const targetByCourse = new Map(
+      targetRows.map((row) => [row.course_id, Number(row.target_score)])
     );
+    const deadlinesByCourse = new Map(
+      deadlineRows.map((row) => [
+        row.course_id,
+        { deadlines: Number(row.deadlines_count ?? 0), exams: Number(row.exams_count ?? 0) },
+      ])
+    );
+
+    const trendByCourse = new Map<string, number>();
+    const groupedTrend = new Map<string, number[]>();
+    for (const row of trendRows) {
+      const list = groupedTrend.get(row.course_id) ?? [];
+      if (list.length < 5) list.push(Number(row.performance_score));
+      groupedTrend.set(row.course_id, list);
+    }
+    groupedTrend.forEach((scores, courseId) => {
+      if (scores.length < 2) {
+        trendByCourse.set(courseId, 0);
+        return;
+      }
+      const newest = scores[0] ?? 0;
+      const oldest = scores[scores.length - 1] ?? 0;
+      trendByCourse.set(courseId, newest - oldest);
+    });
+
+    const formatScaleValue = (value: number) =>
+      displayScale === "percentage" ? roundScore(value).toFixed(1) : roundScore(value).toFixed(2);
+    const defaultTargetValue =
+      displayScale === "bulgarian"
+        ? 4.5
+        : displayScale === "percentage"
+          ? 75
+          : fromPerformanceScore(displayScale, 75);
+
+    const result = courses.map((course) => {
+      const average = computeCourseAverage(gradeItemsByCourse.get(course.id) ?? [], {
+        displayScale,
+        includeTermGrade,
+      });
+      const gradeAverage = average.averageValue;
+      const normalizedAverage = average.normalizedScore;
+      const gradeBand = getGradeBand(displayScale, gradeAverage);
+      const trend = trendByCourse.get(course.id) ?? 0;
+      const studyMinutes = minutesByCourse.get(course.id) ?? 0;
+      const targetScore = targetByCourse.get(course.id) ?? null;
+      const targetValue = targetScore == null ? defaultTargetValue : fromPerformanceScore(displayScale, targetScore);
+      const upcoming = deadlinesByCourse.get(course.id) ?? { deadlines: 0, exams: 0 };
+
+      let attention = 0;
+      const reasons: string[] = [];
+
+      if (gradeAverage == null) {
+        attention += 40;
+        reasons.push("No grades recorded in this term yet.");
+      } else {
+        if (gradeBand === "atRisk") attention += 42;
+        else if (gradeBand === "watch") attention += 22;
+        else if (gradeBand === "good") attention += 6;
+
+        if (gradeBand === "atRisk" || gradeBand === "watch") {
+          reasons.push(`Avg ${formatScaleValue(gradeAverage)} below target ${formatScaleValue(targetValue)}.`);
+        }
+      }
+
+      if (trend < -3) {
+        attention += clamp(Math.abs(trend) * 1.35, 0, 24);
+        reasons.push("Grade trend is declining.");
+      }
+
+      const courseImportance =
+        1 +
+        upcoming.exams * 0.7 +
+        upcoming.deadlines * 0.25 +
+        (gradeBand === "atRisk" ? 0.5 : gradeBand === "watch" ? 0.25 : 0);
+      const expectedStudyMinutes = clamp(Math.round(80 * courseImportance), 60, 240);
+      if (studyMinutes < expectedStudyMinutes) {
+        const shortfall = expectedStudyMinutes - studyMinutes;
+        attention += clamp((shortfall / expectedStudyMinutes) * 28, 0, 28);
+        reasons.push(
+          `Study time is low (${Math.round(studyMinutes)} min vs expected ${expectedStudyMinutes} min).`
+        );
+      }
+
+      if (upcoming.exams > 0 || upcoming.deadlines > 0) {
+        attention += clamp(upcoming.exams * 10 + upcoming.deadlines * 4, 0, 24);
+        reasons.push(
+          `${upcoming.exams} upcoming exam${upcoming.exams === 1 ? "" : "s"} and ${upcoming.deadlines} upcoming task${upcoming.deadlines === 1 ? "" : "s"}.`
+        );
+      }
+
+      const isExcellentStable = shouldSuppressAttentionForExcellent(gradeBand, trend);
+      if (isExcellentStable) {
+        attention = 0;
+        reasons.splice(0, reasons.length, "Excellent performance with stable or improving trend.");
+      }
+
+      const attentionScore = clamp(Math.round(attention), 0, 100);
+      const recommendedMinutes = isExcellentStable
+        ? 0
+        : clamp(Math.round((45 + attentionScore * 1.35) / 15) * 15, 30, 240);
+
+      return {
+        courseId: course.id,
+        courseName: course.name,
+        displayScale,
+        gradeBand,
+        averageValue: gradeAverage == null ? null : roundScore(gradeAverage),
+        averageNormalized: normalizedAverage == null ? null : roundScore(normalizedAverage),
+        attentionScore,
+        recommendedMinutes,
+        reasons: reasons.length ? reasons : ["Maintain current progress with steady study cadence."],
+      };
+    });
+
+    return result.sort((a, b) => b.attentionScore - a.attentionScore);
+  });
+
+  app.get("/analytics/academic-risk", async (req) => {
+    const query = req.query as {
+      termId?: string;
+      from?: string;
+      to?: string;
+      displayScale?: string;
+      includeTermGrade?: string;
+    };
+    const displayScale = normalizeGradeScale(query.displayScale);
+    let termId = query.termId ? Number(query.termId) : NaN;
+    const riskSettings = await getGradeRiskSettings(USER_ID);
+
+    if (!riskSettings.riskEnabled) return [];
+
+    if (!Number.isFinite(termId)) {
+      const fallbackTerm = await prisma.$queryRaw<Array<{ id: number }>>`
+        SELECT id
+        FROM terms
+        WHERE user_id = ${USER_ID}
+        ORDER BY school_year DESC, position DESC, id DESC
+        LIMIT 1
+      `;
+      termId = fallbackTerm[0]?.id ?? NaN;
+    }
+    if (!Number.isFinite(termId)) return [];
+
+    const termRows = await prisma.$queryRaw<
+      Array<{ id: number; school_year: string; position: number }>
+    >`
+      SELECT id, school_year, position
+      FROM terms
+      WHERE id = ${termId} AND user_id = ${USER_ID}
+      LIMIT 1
+    `;
+    const currentTerm = termRows[0];
+    if (!currentTerm) return [];
+
+    const termsInYear = await prisma.$queryRaw<
+      Array<{ id: number; school_year: string; position: number }>
+    >`
+      SELECT id, school_year, position
+      FROM terms
+      WHERE user_id = ${USER_ID} AND school_year = ${currentTerm.school_year}
+      ORDER BY position ASC, id ASC
+    `;
+    const currentIndex = termsInYear.findIndex((item) => item.id === currentTerm.id);
+    const previousTermId = currentIndex > 0 ? termsInYear[currentIndex - 1]?.id ?? null : null;
+    const lookbackReferenceTermId =
+      riskSettings.riskLookback === "previousTerm" && previousTermId != null
+        ? previousTermId
+        : currentTerm.id;
+    const referenceIndex = termsInYear.findIndex((item) => item.id === lookbackReferenceTermId);
+    const trendPreviousTermId =
+      referenceIndex > 0 ? termsInYear[referenceIndex - 1]?.id ?? null : null;
+
+    const evaluationTermIds =
+      riskSettings.riskLookback === "academicYear"
+        ? termsInYear.map((item) => item.id)
+        : [lookbackReferenceTermId];
+    if (!evaluationTermIds.length) return [];
+
+    const toDate = query.to ? new Date(query.to) : new Date();
+    const fromDate = query.from
+      ? new Date(query.from)
+      : new Date(toDate.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const upcomingEnd = new Date(toDate.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+    const courses = await prisma.course.findMany({
+      where: { userId: USER_ID },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    if (!courses.length) return [];
+
+    const evaluationRows = await prisma.$queryRaw<
+      Array<{
+        term_id: number;
+        course_id: string;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        category_name: string | null;
+        is_final: number;
+        final_type: string | null;
+      }>
+    >`
+      SELECT g.term_id, g.course_id, g.scale, g.grade_value, g.performance_score, g.weight, gc.name AS category_name, g.is_final, g.final_type
+      FROM grade_items g
+      LEFT JOIN grade_categories gc ON gc.id = g.category_id
+      WHERE g.user_id = ${USER_ID} AND g.term_id IN (${Prisma.join(evaluationTermIds)})
+    `;
+
+    const trendCurrentRows = await prisma.$queryRaw<
+      Array<{ course_id: string; performance_score: number; weight: number }>
+    >`
+      SELECT course_id, performance_score, weight
+      FROM grade_items
+      WHERE user_id = ${USER_ID} AND term_id = ${lookbackReferenceTermId}
+    `;
+    const trendPreviousRows = trendPreviousTermId
+      ? await prisma.$queryRaw<
+          Array<{ course_id: string; performance_score: number; weight: number }>
+        >`
+          SELECT course_id, performance_score, weight
+          FROM grade_items
+          WHERE user_id = ${USER_ID} AND term_id = ${trendPreviousTermId}
+        `
+      : [];
+
+    let studyRows: Array<{ course_id: string; total_minutes: number | null }> = [];
+    try {
+      studyRows = await prisma.$queryRaw<
+        Array<{ course_id: string; total_minutes: number | null }>
+      >`
+        SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
+        FROM \`StudySession\` s
+        WHERE s.\`userId\` = ${USER_ID}
+          AND s.\`startTime\` >= ${fromDate}
+          AND s.\`startTime\` < ${toDate}
+        GROUP BY s.\`courseId\`
+      `;
+    } catch (error) {
+      req.log.warn({ err: error }, "academic-risk: failed to load study rows");
+    }
+
+    let deadlineRows: Array<{ course_id: string; deadlines_count: number; exams_count: number }> = [];
+    try {
+      deadlineRows = await prisma.$queryRaw<
+        Array<{ course_id: string; deadlines_count: number; exams_count: number }>
+      >`
+        SELECT
+          course_id,
+          COUNT(*) AS deadlines_count,
+          SUM(CASE WHEN kind = 'exam' THEN 1 ELSE 0 END) AS exams_count
+        FROM tasks
+        WHERE user_id = ${USER_ID}
+          AND status <> 'done'
+          AND due_at IS NOT NULL
+          AND due_at >= ${toDate}
+          AND due_at < ${upcomingEnd}
+          AND course_id IS NOT NULL
+        GROUP BY course_id
+      `;
+    } catch (error) {
+      req.log.warn({ err: error }, "academic-risk: failed to load deadlines rows");
+    }
+
+    const weightedAverageScore = (
+      rows: Array<{ performance_score: number; weight: number }>
+    ) => {
+      if (!rows.length) return null;
+      let weighted = 0;
+      let totalWeight = 0;
+      for (const row of rows) {
+        const weight = Math.max(0.05, Number(row.weight ?? 1));
+        weighted += Number(row.performance_score) * weight;
+        totalWeight += weight;
+      }
+      if (totalWeight <= 0) return null;
+      return weighted / totalWeight;
+    };
+
+    const categoryKey = (value: string | null | undefined) =>
+      (value ?? "").trim().toLocaleLowerCase("bg");
+
+    type EvalRow = (typeof evaluationRows)[number];
+    const splitRows = (rows: EvalRow[]) => {
+      const yearFinal = rows.filter((row) => row.final_type === "YEAR");
+      const termFinal = rows.filter((row) => {
+        const category = categoryKey(row.category_name);
+        return (
+          row.final_type === "TERM1" ||
+          row.final_type === "TERM2" ||
+          ((row.is_final ?? 0) === 1 && category === "term grade")
+        );
+      });
+      const current = rows.filter((row) => {
+        if (yearFinal.includes(row) || termFinal.includes(row)) return false;
+        const category = categoryKey(row.category_name);
+        return category === "current" || !category;
+      });
+      return { yearFinal, termFinal, current };
+    };
+
+    const pickEvaluationRows = (rows: EvalRow[]) => {
+      const split = splitRows(rows);
+      if (riskSettings.riskLookback === "academicYear") {
+        if (split.yearFinal.length) return { source: "yearFinal" as const, rows: split.yearFinal };
+        if (riskSettings.riskUseTermFinalIfAvailable && split.termFinal.length) {
+          return { source: "termFinal" as const, rows: split.termFinal };
+        }
+        return { source: "current" as const, rows: split.current };
+      }
+      if (riskSettings.riskUseTermFinalIfAvailable && split.termFinal.length) {
+        return { source: "termFinal" as const, rows: split.termFinal };
+      }
+      return {
+        source: split.current.length ? ("current" as const) : ("termFinal" as const),
+        rows: split.current.length ? split.current : split.termFinal,
+      };
+    };
+
+    const rowsByCourse = new Map<string, EvalRow[]>();
+    for (const row of evaluationRows) {
+      const list = rowsByCourse.get(row.course_id) ?? [];
+      list.push(row);
+      rowsByCourse.set(row.course_id, list);
+    }
+    const trendCurrentByCourse = new Map<string, Array<{ performance_score: number; weight: number }>>();
+    for (const row of trendCurrentRows) {
+      const list = trendCurrentByCourse.get(row.course_id) ?? [];
+      list.push(row);
+      trendCurrentByCourse.set(row.course_id, list);
+    }
+    const trendPreviousByCourse = new Map<string, Array<{ performance_score: number; weight: number }>>();
+    for (const row of trendPreviousRows) {
+      const list = trendPreviousByCourse.get(row.course_id) ?? [];
+      list.push(row);
+      trendPreviousByCourse.set(row.course_id, list);
+    }
     const studyByCourse = new Map(
       studyRows.map((row) => [row.course_id, Number(row.total_minutes ?? 0)])
     );
@@ -1739,91 +2016,176 @@ export async function routes(app: FastifyInstance) {
 
     const totalStudy = courses.reduce((sum, course) => sum + (studyByCourse.get(course.id) ?? 0), 0);
     const averageStudy = totalStudy / Math.max(1, courses.length);
+    const formatScaleValue = (value: number) =>
+      displayScale === "percentage"
+        ? roundScore(value).toFixed(1)
+        : roundScore(value).toFixed(2);
+    const thresholdLabel =
+      riskSettings.riskThresholdMode === "score"
+        ? `${roundScore(riskSettings.riskScoreThreshold).toFixed(1)} score`
+        : `${formatScaleValue(riskSettings.riskGradeThresholdByScale[displayScale])}`;
 
     const result = courses.map((course) => {
-      const currentAverage = currentByCourse.get(course.id) ?? null;
-      const previousAverage = previousByCourse.get(course.id) ?? null;
-      const deltaFromPrevious =
-        currentAverage == null || previousAverage == null ? null : roundScore(currentAverage - previousAverage);
-      const studyMinutes = studyByCourse.get(course.id) ?? 0;
-      const upcoming = deadlinesByCourse.get(course.id) ?? { deadlines: 0, exams: 0 };
+      const selected = pickEvaluationRows(rowsByCourse.get(course.id) ?? []);
+      const performanceScore = weightedAverageScore(
+        selected.rows.map((row) => ({
+          performance_score: Number(row.performance_score),
+          weight: Number(row.weight ?? 1),
+        }))
+      );
+      const performanceGrade =
+        performanceScore == null
+          ? null
+          : fromPerformanceScore(displayScale, performanceScore);
+      const gradeBand = getGradeBand(displayScale, performanceGrade);
+      const dataPoints = selected.rows.length;
+      const deltaFromPrevious = (() => {
+        const currentAvg = weightedAverageScore(trendCurrentByCourse.get(course.id) ?? []);
+        const previousAvg = weightedAverageScore(trendPreviousByCourse.get(course.id) ?? []);
+        if (currentAvg == null || previousAvg == null) return null;
+        const currentValue = fromPerformanceScore(displayScale, currentAvg);
+        const previousValue = fromPerformanceScore(displayScale, previousAvg);
+        return roundScore(currentValue - previousValue);
+      })();
 
+      const belowThreshold =
+        riskSettings.riskThresholdMode === "score"
+          ? performanceScore != null &&
+            performanceScore <= riskSettings.riskScoreThreshold
+          : performanceGrade != null &&
+            performanceGrade <=
+              riskSettings.riskGradeThresholdByScale[displayScale];
+      const hasEnoughData =
+        dataPoints >= riskSettings.riskMinDataPoints ||
+        (riskSettings.riskLookback === "academicYear" &&
+          dataPoints >= 1 &&
+          (selected.source === "yearFinal" || selected.source === "termFinal"));
+      const isAtRisk = Boolean(belowThreshold && hasEnoughData);
+
+      const studyMinutes = studyByCourse.get(course.id) ?? 0;
+      const upcoming = deadlinesByCourse.get(course.id) ?? {
+        deadlines: 0,
+        exams: 0,
+      };
       const reasons: string[] = [];
       const suggestedActions: string[] = [];
       let riskPoints = 0;
 
-      if (currentAverage == null) {
-        riskPoints += 20;
-        reasons.push("No grade average yet for this term.");
-      } else if (currentAverage < 60) {
-        riskPoints += 40;
-        reasons.push(`Low grade average (${roundScore(currentAverage)}).`);
-      } else if (currentAverage < 70) {
-        riskPoints += 28;
-        reasons.push(`Grade average is below safe range (${roundScore(currentAverage)}).`);
-      } else if (currentAverage < 80) {
-        riskPoints += 14;
+      if (isAtRisk) {
+        riskPoints += 52;
+        reasons.push(
+          riskSettings.riskThresholdMode === "score"
+            ? `Score ${performanceScore == null ? "-" : roundScore(performanceScore).toFixed(1)} is below threshold ${roundScore(riskSettings.riskScoreThreshold).toFixed(1)}.`
+            : `Avg ${performanceGrade == null ? "-" : formatScaleValue(performanceGrade)} is below threshold ${formatScaleValue(
+                riskSettings.riskGradeThresholdByScale[displayScale],
+              )}.`
+        );
       }
-
+      if (!hasEnoughData) {
+        reasons.push(
+          `Not enough data points (${dataPoints}/${riskSettings.riskMinDataPoints}) for reliable evaluation.`
+        );
+      }
       if (deltaFromPrevious != null && deltaFromPrevious < -1) {
-        const trendPenalty = clamp(Math.abs(deltaFromPrevious) * 1.5, 6, 24);
-        riskPoints += trendPenalty;
-        reasons.push(`Downward trend vs previous term (${deltaFromPrevious.toFixed(1)}).`);
+        riskPoints += clamp(Math.abs(deltaFromPrevious) * 1.5, 6, 24);
+        reasons.push(`Downward trend (${deltaFromPrevious.toFixed(2)}).`);
       }
-
-      if (averageStudy > 0) {
+      if (averageStudy > 0 && isAtRisk) {
         const studyRatio = studyMinutes / averageStudy;
         if (studyRatio < 0.6) {
           riskPoints += 20;
           reasons.push(`Low study time (${Math.round(studyMinutes)} min in 14 days).`);
         } else if (studyRatio < 0.85) {
           riskPoints += 12;
-          reasons.push(`Study time is below your course average (${Math.round(studyMinutes)} min).`);
+          reasons.push(`Study time is below your average (${Math.round(studyMinutes)} min).`);
         }
       }
-
-      if (upcoming.exams > 0 || upcoming.deadlines > 0) {
-        const deadlinePenalty = clamp(upcoming.exams * 12 + upcoming.deadlines * 5, 5, 24);
-        riskPoints += deadlinePenalty;
+      if (isAtRisk && (upcoming.exams > 0 || upcoming.deadlines > 0)) {
+        riskPoints += clamp(upcoming.exams * 12 + upcoming.deadlines * 5, 5, 24);
         reasons.push(
-          `${upcoming.exams} upcoming exam${upcoming.exams === 1 ? "" : "s"} and ${upcoming.deadlines} deadline${upcoming.deadlines === 1 ? "" : "s"} in 14 days.`
+          `${upcoming.exams} upcoming exam${upcoming.exams === 1 ? "" : "s"} and ${upcoming.deadlines} deadline${upcoming.deadlines === 1 ? "" : "s"}.`
         );
       }
 
+      const isExcellentStable = shouldSuppressAttentionForExcellent(
+        gradeBand,
+        deltaFromPrevious,
+      );
+      if (isExcellentStable) riskPoints = 0;
+      if (!isAtRisk) riskPoints = 0;
+
       const riskScore = clamp(Math.round(riskPoints), 0, 100);
       const riskLevel = riskScore >= 70 ? "high" : riskScore >= 40 ? "medium" : "low";
-      const recommendedMinutes = riskLevel === "high" ? 120 : riskLevel === "medium" ? 60 : 30;
+      const recommendedMinutes = isAtRisk
+        ? clamp(Math.round((45 + riskScore * 1.2) / 15) * 15, 30, 240)
+        : 0;
 
-      suggestedActions.push(`Add ${recommendedMinutes}m this week`);
-      if (upcoming.exams > 0 || riskLevel !== "low") {
-        suggestedActions.push("Schedule revision");
+      if (isAtRisk && recommendedMinutes > 0) {
+        suggestedActions.push(`Add ${recommendedMinutes}m this week`);
+        if (upcoming.exams > 0 || upcoming.deadlines > 0) {
+          suggestedActions.push("Schedule revision");
+        }
+        suggestedActions.push("Create checklist");
       }
-      suggestedActions.push("Create checklist");
 
       return {
         courseId: course.id,
         courseName: course.name,
         riskScore,
         riskLevel,
-        reasons: reasons.length ? reasons : ["Current performance is stable."],
+        gradeBand,
+        displayScale,
+        reasons:
+          reasons.length > 0
+            ? reasons
+            : [
+                `Based on ${riskSettings.riskLookback} and threshold ${thresholdLabel}.`,
+              ],
         suggestedActions,
         recommendedMinutes,
         studyMinutes14d: Math.round(studyMinutes),
         upcomingDeadlines: upcoming.deadlines,
         upcomingExams: upcoming.exams,
-        currentAverage: currentAverage == null ? null : roundScore(currentAverage),
+        currentAverage:
+          performanceGrade == null ? null : roundScore(performanceGrade),
+        currentAverageNormalized:
+          performanceScore == null ? null : roundScore(performanceScore),
         deltaFromPrevious,
       };
     });
 
-    return result.sort((a, b) => b.riskScore - a.riskScore);
+    const filtered = riskSettings.riskShowOnlyIfBelowThreshold
+      ? result.filter((item) => item.riskLevel !== "low")
+      : result;
+    return filtered.sort((a, b) => b.riskScore - a.riskScore);
   });
 
   app.get("/analytics/grades-summary", async (req) => {
-    const query = req.query as { termId?: string };
+    const query = req.query as {
+      termId?: string;
+      displayScale?: string;
+      includeTermGrade?: string;
+    };
+    const displayScale = normalizeGradeScale(query.displayScale);
+    const includeTermGrade = query.includeTermGrade === "1" || query.includeTermGrade === "true";
     const termId = Number(query.termId);
     if (!Number.isFinite(termId)) {
-      return { termId: null, overallAverage: null, previousTermAverage: null, deltaFromPrevious: null, bestCourses: [], worstCourses: [], courseTrends: [] };
+      return {
+        termId: null,
+        displayScale,
+        includeTermGrade,
+        method: includeTermGrade
+          ? "Course averages from Current grades + Term grade (1 item weight), then averaged across courses."
+          : "Course averages from Current grades only, then averaged across courses.",
+        overallAverage: null,
+        overallAverageNormalized: null,
+        previousTermAverage: null,
+        previousTermAverageNormalized: null,
+        deltaFromPrevious: null,
+        bestCourses: [],
+        worstCourses: [],
+        courseTrends: [],
+      };
     }
 
     const termRows = await prisma.$queryRaw<
@@ -1841,7 +2203,22 @@ export async function routes(app: FastifyInstance) {
     `;
     const term = termRows[0];
     if (!term) {
-      return { termId: null, overallAverage: null, previousTermAverage: null, deltaFromPrevious: null, bestCourses: [], worstCourses: [], courseTrends: [] };
+      return {
+        termId: null,
+        displayScale,
+        includeTermGrade,
+        method: includeTermGrade
+          ? "Course averages from Current grades + Term grade (1 item weight), then averaged across courses."
+          : "Course averages from Current grades only, then averaged across courses.",
+        overallAverage: null,
+        overallAverageNormalized: null,
+        previousTermAverage: null,
+        previousTermAverageNormalized: null,
+        deltaFromPrevious: null,
+        bestCourses: [],
+        worstCourses: [],
+        courseTrends: [],
+      };
     }
 
     const termsInYear = await prisma.$queryRaw<
@@ -1856,77 +2233,182 @@ export async function routes(app: FastifyInstance) {
     const previousTerm = currentIndex > 0 ? termsInYear[currentIndex - 1] : undefined;
     const previousTermId = previousTerm?.id ?? null;
 
-    const weightedRows = await prisma.$queryRaw<
-      Array<{ course_id: string; course_name: string; weighted_score: number; item_count: number }>
+    const currentRows = await prisma.$queryRaw<
+      Array<{
+        course_id: string;
+        course_name: string;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        category_name: string | null;
+      }>
     >`
       SELECT
         g.course_id,
         c.name AS course_name,
-        (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score,
-        COUNT(*) AS item_count
+        g.scale,
+        g.grade_value,
+        g.performance_score,
+        g.weight,
+        gc.name AS category_name
       FROM grade_items g
       INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+      LEFT JOIN grade_categories gc ON gc.id = g.category_id
       WHERE g.user_id = ${USER_ID} AND g.term_id = ${term.id}
-      GROUP BY g.course_id, c.name
-      ORDER BY weighted_score DESC
+      ORDER BY c.name ASC, g.graded_on DESC, g.id DESC
     `;
-
-    const overallRow = await prisma.$queryRaw<Array<{ weighted_score: number | null }>>`
-      SELECT
-        (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
-      FROM grade_items
-      WHERE user_id = ${USER_ID} AND term_id = ${term.id}
-    `;
-
-    const previousRow = previousTermId
-      ? await prisma.$queryRaw<Array<{ weighted_score: number | null }>>`
-          SELECT
-            (SUM(performance_score * weight) / NULLIF(SUM(weight), 0)) AS weighted_score
-          FROM grade_items
-          WHERE user_id = ${USER_ID} AND term_id = ${previousTermId}
-        `
-      : [{ weighted_score: null }];
-
-    const previousCourseRows = previousTermId
-      ? await prisma.$queryRaw<Array<{ course_id: string; weighted_score: number }>>`
+    const previousRows = previousTermId
+      ? await prisma.$queryRaw<
+          Array<{
+            course_id: string;
+            course_name: string;
+            scale: string;
+            grade_value: number;
+            performance_score: number;
+            weight: number;
+            category_name: string | null;
+          }>
+        >`
           SELECT
             g.course_id,
-            (SUM(g.performance_score * g.weight) / NULLIF(SUM(g.weight), 0)) AS weighted_score
+            c.name AS course_name,
+            g.scale,
+            g.grade_value,
+            g.performance_score,
+            g.weight,
+            gc.name AS category_name
           FROM grade_items g
+          INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
+          LEFT JOIN grade_categories gc ON gc.id = g.category_id
           WHERE g.user_id = ${USER_ID} AND g.term_id = ${previousTermId}
-          GROUP BY g.course_id
+          ORDER BY c.name ASC, g.graded_on DESC, g.id DESC
         `
       : [];
-    const previousByCourse = new Map(previousCourseRows.map((row) => [row.course_id, Number(row.weighted_score)]));
 
-    const ranked = weightedRows
+    const buildMap = (
+      rows: Array<{
+        course_id: string;
+        course_name: string;
+        scale: string;
+        grade_value: number;
+        performance_score: number;
+        weight: number;
+        category_name: string | null;
+      }>
+    ) => {
+      const byCourse = new Map<
+        string,
+        {
+          courseName: string;
+          items: GradeAverageInputItem[];
+        }
+      >();
+      for (const row of rows) {
+        const current = byCourse.get(row.course_id) ?? {
+          courseName: row.course_name,
+          items: [],
+        };
+        current.items.push({
+          scale: normalizeGradeScale(row.scale),
+          gradeValue: Number(row.grade_value),
+          performanceScore: Number(row.performance_score),
+          weight: Number(row.weight),
+          categoryName: row.category_name,
+        });
+        byCourse.set(row.course_id, current);
+      }
+      return byCourse;
+    };
+
+    const currentByCourse = buildMap(currentRows);
+    const previousByCourse = buildMap(previousRows);
+
+    const ranked = Array.from(currentByCourse.entries())
+      .map(([courseId, course]) => {
+        const average = computeCourseAverage(course.items, { displayScale, includeTermGrade });
+        return {
+          courseId,
+          courseName: course.courseName,
+          averageValue: average.averageValue,
+          averageScore: average.averageValue,
+          averageNormalizedScore: average.normalizedScore,
+          itemCount: average.itemCount,
+        };
+      })
+      .filter((row) => row.averageValue != null)
       .map((row) => ({
-        courseId: row.course_id,
-        courseName: row.course_name,
-        averageScore: roundScore(Number(row.weighted_score)),
-        itemCount: Number(row.item_count),
+        ...row,
+        averageValue: roundScore(row.averageValue ?? 0),
+        averageScore: roundScore(row.averageScore ?? 0),
+        averageNormalizedScore:
+          row.averageNormalizedScore == null ? null : roundScore(row.averageNormalizedScore),
       }))
-      .sort((a, b) => b.averageScore - a.averageScore);
+      .sort((a, b) => (b.averageValue ?? 0) - (a.averageValue ?? 0));
 
     const courseTrends = ranked.map((row) => {
-      const previousScore = previousByCourse.get(row.courseId);
+      const previousCourse = previousByCourse.get(row.courseId);
+      const previousAverage = previousCourse
+        ? computeCourseAverage(previousCourse.items, { displayScale, includeTermGrade })
+        : null;
+      const previousValue =
+        previousAverage?.averageValue == null ? null : roundScore(previousAverage.averageValue);
+      const previousNormalized =
+        previousAverage?.normalizedScore == null ? null : roundScore(previousAverage.normalizedScore);
       return {
         ...row,
-        previousAverageScore: previousScore === undefined ? null : roundScore(previousScore),
-        delta: previousScore === undefined ? null : roundScore(row.averageScore - previousScore),
+        previousAverageValue: previousValue,
+        previousAverageScore: previousValue,
+        previousAverageNormalizedScore: previousNormalized,
+        delta:
+          row.averageValue == null || previousValue == null
+            ? null
+            : roundScore(row.averageValue - previousValue),
       };
     });
 
-    const overallAverage = overallRow[0]?.weighted_score == null ? null : roundScore(Number(overallRow[0].weighted_score));
-    const previousTermAverage =
-      previousRow[0]?.weighted_score == null ? null : roundScore(Number(previousRow[0].weighted_score));
+    const averageAcrossCourses = (rows: typeof ranked, key: "averageValue" | "averageNormalizedScore") => {
+      const values = rows
+        .map((row) => row[key])
+        .filter((value): value is number => value != null && Number.isFinite(value));
+      if (!values.length) return null;
+      return roundScore(values.reduce((sum, value) => sum + value, 0) / values.length);
+    };
+
+    const overallAverage = averageAcrossCourses(ranked, "averageValue");
+    const overallAverageNormalized = averageAcrossCourses(ranked, "averageNormalizedScore");
+
+    const previousRanked = Array.from(previousByCourse.entries()).map(([_, course]) =>
+      computeCourseAverage(course.items, { displayScale, includeTermGrade })
+    );
+    const previousAverageValues = previousRanked
+      .map((row) => row.averageValue)
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    const previousNormalizedValues = previousRanked
+      .map((row) => row.normalizedScore)
+      .filter((value): value is number => value != null && Number.isFinite(value));
+    const previousTermAverage = previousAverageValues.length
+      ? roundScore(previousAverageValues.reduce((sum, value) => sum + value, 0) / previousAverageValues.length)
+      : null;
+    const previousTermAverageNormalized = previousNormalizedValues.length
+      ? roundScore(
+          previousNormalizedValues.reduce((sum, value) => sum + value, 0) / previousNormalizedValues.length
+        )
+      : null;
 
     return {
       termId: String(term.id),
       termName: term.name,
       schoolYear: term.school_year,
+      displayScale,
+      includeTermGrade,
+      method: includeTermGrade
+        ? "Course averages from Current grades + Term grade (1 item weight), then averaged across courses."
+        : "Course averages from Current grades only, then averaged across courses.",
       overallAverage,
+      overallAverageNormalized,
       previousTermAverage,
+      previousTermAverageNormalized,
       deltaFromPrevious:
         overallAverage != null && previousTermAverage != null
           ? roundScore(overallAverage - previousTermAverage)

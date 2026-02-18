@@ -7,7 +7,17 @@ import { getAnalyticsPrediction } from "./analytics-prediction.js";
 import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
 import { ensureFocusGardenTables } from "./focus-garden.js";
-import { ensureGradesTables, getIgnoredShkoloSubjects, setIgnoredShkoloSubjects } from "./grades.js";
+import {
+  getCelebrationSettings,
+  setCelebrationSettings,
+  ensureGradesTables,
+  getGradeRiskSettings,
+  getIgnoredShkoloSubjects,
+  setGradeRiskSettings,
+  setIgnoredShkoloSubjects,
+  type CelebrationSettings,
+  type GradeRiskSettings,
+} from "./grades.js";
 import { getAnalyticsInsights } from "./insights.js";
 import { ensurePlannerTables } from "./planner.js";
 import { ensureStudyOrganizationTables } from "./organization.js";
@@ -20,7 +30,11 @@ import { ensureAdaptiveTimerTables, getAdaptiveEnabled, getTimerRecommendation, 
 
 const app = Fastify({ logger: true });
 
-await app.register(cors, { origin: true });
+await app.register(cors, {
+  origin: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+});
 await app.register(multipart, {
   limits: {
     fileSize: 10 * 1024 * 1024,
@@ -70,12 +84,16 @@ app.get("/me", async () => {
   const adaptiveEnabled = await getAdaptiveEnabled(USER_ID);
   const uiPreferences = await getUiPreferences(USER_ID);
   const ignoredShkoloSubjects = await getIgnoredShkoloSubjects(USER_ID);
+  const riskSettings = await getGradeRiskSettings(USER_ID);
+  const celebrationSettings = await getCelebrationSettings(USER_ID);
   return {
     ...me,
     settings: me.settings
       ? {
           ...me.settings,
           adaptiveEnabled,
+          ...riskSettings,
+          ...celebrationSettings,
         }
       : null,
     uiPreferences,
@@ -171,6 +189,22 @@ app.put("/me/preferences", async (req, reply) => {
       longSessionMinutes?: number;
       breakSessionMinutes?: number;
       adaptiveEnabled?: boolean;
+      riskEnabled?: boolean;
+      riskThresholdMode?: "score" | "grade";
+      riskScoreThreshold?: number;
+      riskGradeThresholdByScale?: {
+        bulgarian?: number;
+        german?: number;
+        percentage?: number;
+      };
+      riskLookback?: "currentTerm" | "previousTerm" | "academicYear";
+      riskMinDataPoints?: number;
+      riskUseTermFinalIfAvailable?: boolean;
+      riskShowOnlyIfBelowThreshold?: boolean;
+      celebrationEnabled?: boolean;
+      celebrationScoreThreshold?: number;
+      celebrationCooldownHours?: number;
+      celebrationShowFor?: "gradeItem" | "termFinal" | "courseAverage" | "all";
     };
     targets?: Array<{ weekday: number; targetMinutes: number }>;
     uiPreferences?: {
@@ -213,6 +247,38 @@ app.put("/me/preferences", async (req, reply) => {
   const longSessionMinutes = Number(settings.longSessionMinutes);
   const breakSessionMinutes = Number(settings.breakSessionMinutes);
   const adaptiveEnabled = settings.adaptiveEnabled ?? true;
+  const riskSettingsInput: Partial<GradeRiskSettings> = {};
+  if (settings.riskEnabled !== undefined) riskSettingsInput.riskEnabled = settings.riskEnabled;
+  if (settings.riskThresholdMode !== undefined) riskSettingsInput.riskThresholdMode = settings.riskThresholdMode;
+  if (settings.riskScoreThreshold !== undefined) riskSettingsInput.riskScoreThreshold = settings.riskScoreThreshold;
+  if (settings.riskGradeThresholdByScale !== undefined) {
+    riskSettingsInput.riskGradeThresholdByScale = {
+      bulgarian: settings.riskGradeThresholdByScale.bulgarian ?? 4.5,
+      german: settings.riskGradeThresholdByScale.german ?? 3.5,
+      percentage: settings.riskGradeThresholdByScale.percentage ?? 70,
+    };
+  }
+  if (settings.riskLookback !== undefined) riskSettingsInput.riskLookback = settings.riskLookback;
+  if (settings.riskMinDataPoints !== undefined) riskSettingsInput.riskMinDataPoints = settings.riskMinDataPoints;
+  if (settings.riskUseTermFinalIfAvailable !== undefined) {
+    riskSettingsInput.riskUseTermFinalIfAvailable = settings.riskUseTermFinalIfAvailable;
+  }
+  if (settings.riskShowOnlyIfBelowThreshold !== undefined) {
+    riskSettingsInput.riskShowOnlyIfBelowThreshold = settings.riskShowOnlyIfBelowThreshold;
+  }
+  const celebrationSettingsInput: Partial<CelebrationSettings> = {};
+  if (settings.celebrationEnabled !== undefined) {
+    celebrationSettingsInput.celebrationEnabled = settings.celebrationEnabled;
+  }
+  if (settings.celebrationScoreThreshold !== undefined) {
+    celebrationSettingsInput.celebrationScoreThreshold = settings.celebrationScoreThreshold;
+  }
+  if (settings.celebrationCooldownHours !== undefined) {
+    celebrationSettingsInput.celebrationCooldownHours = settings.celebrationCooldownHours;
+  }
+  if (settings.celebrationShowFor !== undefined) {
+    celebrationSettingsInput.celebrationShowFor = settings.celebrationShowFor;
+  }
 
   if (typeof adaptiveEnabled !== "boolean") {
     return reply.code(400).send({ error: "adaptiveEnabled must be a boolean." });
@@ -304,6 +370,11 @@ app.put("/me/preferences", async (req, reply) => {
     body.ignoredShkoloSubjects !== undefined
       ? await setIgnoredShkoloSubjects(USER_ID, body.ignoredShkoloSubjects)
       : await getIgnoredShkoloSubjects(USER_ID);
+  const riskSettings = await setGradeRiskSettings(USER_ID, riskSettingsInput);
+  const celebrationSettings = await setCelebrationSettings(
+    USER_ID,
+    celebrationSettingsInput,
+  );
 
   await recomputeAndStoreAchievements(USER_ID);
   await recomputeAndStoreStreak(USER_ID);
@@ -319,6 +390,8 @@ app.put("/me/preferences", async (req, reply) => {
       ? {
           ...me.settings,
           adaptiveEnabled,
+          ...riskSettings,
+          ...celebrationSettings,
         }
       : null,
     uiPreferences,

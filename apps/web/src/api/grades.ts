@@ -1,6 +1,7 @@
 import { apiRequest } from '@/api/client'
 import type {
   AcademicRiskDto,
+  CelebrationStateDto,
   BulkGradeImportDto,
   BulkGradeImportResultDto,
   CreateGradeCategoryDto,
@@ -40,6 +41,12 @@ export async function updateTerm(id: string, payload: UpdateTermDto) {
 
 export async function deleteTerm(id: string) {
   return apiRequest<{ ok: boolean }>(`/terms/${id}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function deleteAllGradesForTerm(termId: string) {
+  return apiRequest<{ deletedCount: number }>(`/terms/${termId}/grades`, {
     method: 'DELETE',
   })
 }
@@ -134,9 +141,17 @@ export async function getGradesWhatIf(payload: {
   })
 }
 
-export async function getGradesSummary(termId: string, signal?: AbortSignal) {
+export async function getGradesSummary(
+  termId: string,
+  options: { displayScale?: 'percentage' | 'german' | 'bulgarian'; includeTermGrade?: boolean } = {},
+  signal?: AbortSignal,
+) {
   return apiRequest<GradesSummaryDto>('/analytics/grades-summary', {
-    query: { termId },
+    query: {
+      termId,
+      displayScale: options.displayScale,
+      includeTermGrade: options.includeTermGrade ? '1' : '0',
+    },
     signal,
   })
 }
@@ -152,16 +167,57 @@ export async function upsertGradeTarget(courseId: string, payload: { scale: 'per
   })
 }
 
-export async function getStudyRecommendations(query: { termId: string; from?: string; to?: string }, signal?: AbortSignal) {
+export async function getStudyRecommendations(
+  query: {
+    termId: string
+    from?: string
+    to?: string
+    displayScale?: 'percentage' | 'german' | 'bulgarian'
+    includeTermGrade?: boolean
+  },
+  signal?: AbortSignal,
+) {
+  const requestQuery = {
+    ...query,
+    includeTermGrade: query.includeTermGrade ? '1' : '0',
+  }
   return apiRequest<StudyRecommendationDto[]>('/recommendations/study-plan', {
-    query,
+    query: requestQuery,
     signal,
   })
 }
 
-export async function getAcademicRisk(query: { termId?: string; from?: string; to?: string } = {}, signal?: AbortSignal) {
+export async function getAcademicRisk(
+  query: {
+    termId?: string
+    from?: string
+    to?: string
+    displayScale?: 'percentage' | 'german' | 'bulgarian'
+    includeTermGrade?: boolean
+  } = {},
+  signal?: AbortSignal,
+) {
+  const requestQuery = {
+    ...query,
+    includeTermGrade: query.includeTermGrade ? '1' : '0',
+  }
   return apiRequest<AcademicRiskDto[]>('/analytics/academic-risk', {
-    query,
+    query: requestQuery,
     signal,
+  })
+}
+
+export async function getCelebrationState(signal?: AbortSignal) {
+  return apiRequest<CelebrationStateDto>('/celebrations/state', { signal })
+}
+
+export async function recordCelebration(payload: {
+  courseId: string
+  score?: number | null
+  type?: 'gradeItem' | 'termFinal' | 'courseAverage' | 'all' | 'manual'
+}) {
+  return apiRequest<{ ok: boolean }>('/celebrations/record', {
+    method: 'POST',
+    body: payload,
   })
 }

@@ -8,6 +8,16 @@ export type CourseMatchResult = {
   matchedCourseId: string | null
   matchedCourseName: string | null
   score: number
+  debug: {
+    normalizedExtracted: string
+    normalizedCandidate: string
+    levenshteinDistance: number
+    tokenScore: number
+    charScore: number
+    overlapBonus: number
+    threshold: number
+    formula: string
+  }
 }
 
 function clamp(value: number, min = 0, max = 1) {
@@ -94,17 +104,39 @@ function tokenOverlapScore(tokensA: string[], tokensB: string[]) {
   return Math.max(exactScore, fuzzyScore)
 }
 
-function similarityScore(a: string, b: string) {
-  if (a === b) return 1
-  if (!a.length || !b.length) return 0
-
+function computeSimilarityDetails(a: string, b: string) {
+  if (a === b) {
+    return {
+      score: 1,
+      tokenScore: 1,
+      charScore: 1,
+      overlapBonus: 0,
+      levenshteinDistance: 0,
+    }
+  }
+  if (!a.length || !b.length) {
+    return {
+      score: 0,
+      tokenScore: 0,
+      charScore: 0,
+      overlapBonus: 0,
+      levenshteinDistance: Math.max(a.length, b.length),
+    }
+  }
   const tokensA = tokenizeCourseName(a)
   const tokensB = tokenizeCourseName(b)
   const tokenScore = tokenOverlapScore(tokensA, tokensB)
   const charScore = charSimilarity(a, b)
+  const levenshtein = levenshteinDistance(a, b)
 
   const overlapBonus = tokenScore >= 0.66 ? 0.1 : tokenScore >= 0.5 ? 0.06 : tokenScore >= 0.34 ? 0.03 : 0
-  return clamp(tokenScore * 0.6 + charScore * 0.4 + overlapBonus)
+  return {
+    score: clamp(tokenScore * 0.6 + charScore * 0.4 + overlapBonus),
+    tokenScore,
+    charScore,
+    overlapBonus,
+    levenshteinDistance: levenshtein,
+  }
 }
 
 export function runCourseMatchingDevSelfTest() {
@@ -149,23 +181,44 @@ export function matchExtractedCoursesToUserCourses(
   return extractedCourseNames.map((extractedCourseName) => {
     const normalizedExtracted = normalizeCourseName(extractedCourseName)
 
-    let bestCourse: UserCourse | null = null
+    let bestCourse: (UserCourse & { normalized: string }) | null = null
     let bestScore = 0
+    let bestDetails = {
+      score: 0,
+      tokenScore: 0,
+      charScore: 0,
+      overlapBonus: 0,
+      levenshteinDistance: normalizedExtracted.length,
+    }
 
     for (const course of preparedCourses) {
-      const score = similarityScore(normalizedExtracted, course.normalized)
+      const details = computeSimilarityDetails(normalizedExtracted, course.normalized)
+      const score = details.score
       if (score > bestScore) {
         bestScore = score
         bestCourse = course
+        bestDetails = details
       }
     }
+
+    const debugBase = {
+      normalizedExtracted,
+      normalizedCandidate: bestCourse?.normalized ?? '',
+      levenshteinDistance: bestDetails.levenshteinDistance,
+      tokenScore: bestDetails.tokenScore,
+      charScore: bestDetails.charScore,
+      overlapBonus: bestDetails.overlapBonus,
+      threshold,
+      formula: 'score = clamp(tokenScore*0.6 + charScore*0.4 + overlapBonus)',
+    } as const
 
     if (!bestCourse || bestScore < threshold) {
       return {
         extractedCourseName,
         matchedCourseId: null,
         matchedCourseName: null,
-        score: bestScore,
+        score: clamp(bestScore),
+        debug: debugBase,
       }
     }
 
@@ -173,7 +226,8 @@ export function matchExtractedCoursesToUserCourses(
       extractedCourseName,
       matchedCourseId: bestCourse.id,
       matchedCourseName: bestCourse.name,
-      score: bestScore,
+      score: clamp(bestScore),
+      debug: debugBase,
     }
   })
 }

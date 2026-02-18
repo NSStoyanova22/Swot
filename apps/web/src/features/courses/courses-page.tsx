@@ -239,13 +239,29 @@ export function CoursesPage() {
                         className="h-8"
                       />
                     ) : (
-                      <button
-                        type="button"
-                        className="text-left text-sm font-medium"
-                        onClick={() => setSelectedCourseId(course.id)}
-                      >
-                        {course.name}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="text-left text-sm font-medium"
+                          onClick={() => setSelectedCourseId(course.id)}
+                        >
+                          {course.name}
+                        </button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          type="button"
+                          title="Edit name"
+                          aria-label={`Edit name for ${course.name}`}
+                          onClick={() => {
+                            setSelectedCourseId(course.id)
+                            setEditingCourseId(course.id)
+                            setEditingCourseName(course.name)
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </div>
                     )}
 
                     <div className="flex items-center gap-1">
@@ -272,32 +288,18 @@ export function CoursesPage() {
                           </Button>
                         </>
                       ) : (
-                        <>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            type="button"
-                            onClick={() => {
-                              setSelectedCourseId(course.id)
-                              setEditingCourseId(course.id)
-                              setEditingCourseName(course.name)
-                            }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              deleteCourseMutation.mutate(course.id)
-                            }}
-                            disabled={deleteCourseMutation.isPending}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            deleteCourseMutation.mutate(course.id)
+                          }}
+                          disabled={deleteCourseMutation.isPending}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       )}
                     </div>
                   </div>

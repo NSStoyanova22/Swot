@@ -1,12 +1,13 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BarChart3, Calculator, CalendarPlus2, GraduationCap, Plus, Trash2 } from 'lucide-react'
+import { BarChart3, Calculator, CalendarPlus2, Check, GraduationCap, Pencil, Plus, Trash2, X } from 'lucide-react'
 
-import { createCourse, getCourses } from '@/api/courses'
+import { createCourse, getCourses, updateCourse } from '@/api/courses'
+import { getMe, updatePreferences } from '@/api/me'
 import { autoAddPlannerBlocks, deletePlannerBlock } from '@/api/planner'
 import { createOrganizationTask } from '@/api/organization'
-import { bulkImportGrades, createGrade, createGradeCategory, createTerm, deleteGrade, deleteGradeCategory, deleteTerm, extractTextFromImage, getAcademicRisk, getGradeCategories, getGradeTargets, getGrades, getGradesSummary, getGradesWhatIf, getStudyRecommendations, getTerms, importShkoloPdf, updateGradeCategory, upsertGradeTarget } from '@/api/grades'
-import type { GradeCategoryDto, GradeItemDto, GradeScale } from '@/api/dtos'
+import { bulkImportGrades, createGrade, createGradeCategory, createTerm, deleteAllGradesForTerm, deleteGrade, deleteGradeCategory, deleteTerm, extractTextFromImage, getAcademicRisk, getCelebrationState, getGradeCategories, getGradeTargets, getGrades, getGradesSummary, getGradesWhatIf, getTerms, importShkoloPdf, recordCelebration, updateGrade, updateGradeCategory, upsertGradeTarget } from '@/api/grades'
+import type { GradeCategoryDto, GradeItemDto, GradeScale, UpdatePreferencesDto } from '@/api/dtos'
 import { PageContainer, PageHeader } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -16,11 +17,18 @@ import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { GradeChip } from '@/features/grades/GradeChip'
+import { notifyCelebration } from '@/features/celebration/celebration-events'
+import { CelebrationOverlay } from '@/features/celebration/CelebrationOverlay'
 import { matchExtractedCoursesToUserCourses } from '@/features/grades/course-matching'
 import { parseGradeSheetLine } from '@/features/grades/parse-grade-sheet'
+import { SubjectGradeTable } from '@/features/grades/SubjectGradeTable'
+import { gradeToNormalizedScore } from '@/features/grades/grade-colors'
 import { cn } from '@/lib/utils'
 
 const termsKey = ['terms'] as const
+const weekdays = [1, 2, 3, 4, 5, 6, 7] as const
+const SHKOLO_UNMATCHED_THRESHOLD = 0.55
 
 function defaultSchoolYear() {
   const now = new Date()
@@ -33,9 +41,10 @@ function formatScore(value: number | null | undefined) {
   return `${value.toFixed(1)}`
 }
 
-function formatGrade(scale: GradeScale, value: number) {
-  if (scale === 'percentage') return `${value.toFixed(1)}%`
-  return value.toFixed(2).replace(/\.00$/, '')
+function formatAverageValue(scale: GradeScale, value: number | null | undefined) {
+  if (value == null) return '-'
+  if (scale === 'percentage') return `${value.toFixed(1)}`
+  return value.toFixed(2)
 }
 
 function getWeekStart(date = new Date()) {
@@ -70,6 +79,35 @@ function parseGradeListText(value: string) {
     .filter((item): item is number => item != null)
 }
 
+function isExcellentTermFinal(scale: GradeScale, value: number) {
+  if (scale === 'bulgarian') return value >= 5.75 || Math.abs(value - 6) < 0.001
+  if (scale === 'german') return value <= 1.5 || gradeToNormalizedScore(scale, value) >= 90
+  return value >= 90
+}
+
+function buildMatchTooltip(debug: {
+  normalizedExtracted: string
+  normalizedCandidate: string
+  levenshteinDistance: number
+  tokenScore: number
+  charScore: number
+  overlapBonus: number
+  threshold: number
+  formula: string
+} | null) {
+  if (!debug) return 'No match diagnostics available.'
+  return [
+    `normalizedExtracted: ${debug.normalizedExtracted || '-'}`,
+    `normalizedCandidate: ${debug.normalizedCandidate || '-'}`,
+    `levenshteinDistance: ${debug.levenshteinDistance}`,
+    `tokenScore: ${debug.tokenScore.toFixed(3)}`,
+    `charScore: ${debug.charScore.toFixed(3)}`,
+    `overlapBonus: ${debug.overlapBonus.toFixed(3)}`,
+    `threshold: ${debug.threshold.toFixed(2)}`,
+    debug.formula,
+  ].join('\n')
+}
+
 export function GradesPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -80,6 +118,10 @@ export function GradesPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [importPhotoOpen, setImportPhotoOpen] = useState(false)
   const [whatIfOpen, setWhatIfOpen] = useState(false)
+  const [deleteTermGradesConfirmOpen, setDeleteTermGradesConfirmOpen] = useState(false)
+  const [deleteTermGradesConfirmText, setDeleteTermGradesConfirmText] = useState('')
+  const [summaryDisplayScale, setSummaryDisplayScale] = useState<GradeScale>('bulgarian')
+  const [includeTermGradeInAverage, setIncludeTermGradeInAverage] = useState(false)
 
   const [termForm, setTermForm] = useState({
     schoolYear: defaultSchoolYear(),
@@ -117,6 +159,8 @@ export function GradesPage() {
     gradedOn: new Date().toISOString().slice(0, 10),
   })
   const [importMode, setImportMode] = useState<'text' | 'shkolo-pdf'>('text')
+  const [editingCourseNameId, setEditingCourseNameId] = useState<string | null>(null)
+  const [editingCourseNameValue, setEditingCourseNameValue] = useState('')
   const [photoImportForm, setPhotoImportForm] = useState({
     scale: 'bulgarian' as GradeScale,
     gradedOn: new Date().toISOString().slice(0, 10),
@@ -139,8 +183,21 @@ export function GradesPage() {
     currentGradesCount: number
     termGradesFoundCount: number
     skippedLines: number
+    parseWarnings: string[]
     debug?: {
       rawSamples: string[]
+      pagesText?: Array<{
+        page: number
+        text: string
+      }>
+      pageItems?: Record<string, Array<{
+        page: number
+        str: string
+        x: number
+        y: number
+        width: number
+        height: number
+      }>>
       usedOcrFallback: boolean
       scannedThreshold: number
       totalExtractedLength: number
@@ -162,15 +219,39 @@ export function GradesPage() {
     courseId: string
     matchedCourseName: string
     matchScore: number
+    matchDebug: {
+      normalizedExtracted: string
+      normalizedCandidate: string
+      levenshteinDistance: number
+      tokenScore: number
+      charScore: number
+      overlapBonus: number
+      threshold: number
+      formula: string
+    } | null
     term1Final: string
     term2Final: string
     yearFinal: string
     term1Current: string
     term2Current: string
+    rawRowText: string
+    parseWarnings: string[]
   }>>([])
   const [shkoloCreateCourseRowKey, setShkoloCreateCourseRowKey] = useState<string | null>(null)
   const [shkoloCreateCourseName, setShkoloCreateCourseName] = useState('')
+  const [shkoloEditingSubjectRowKey, setShkoloEditingSubjectRowKey] = useState<string | null>(null)
+  const [shkoloEditingSubjectValue, setShkoloEditingSubjectValue] = useState('')
+  const [shkoloMoveGradeDialog, setShkoloMoveGradeDialog] = useState<{
+    fromRowKey: string
+    sourceField: 'term1Current' | 'term2Current'
+    gradeIndex: number
+    gradeValue: number
+  } | null>(null)
+  const [shkoloMoveGradeTargetRowKey, setShkoloMoveGradeTargetRowKey] = useState<string>('')
+  const [shkoloSaveConfirmOpen, setShkoloSaveConfirmOpen] = useState(false)
   const [shkoloRemovedRowsCount, setShkoloRemovedRowsCount] = useState(0)
+  const [shkoloRemoveRowKey, setShkoloRemoveRowKey] = useState<string | null>(null)
+  const [shkoloAlwaysIgnoreSubject, setShkoloAlwaysIgnoreSubject] = useState(false)
   const [photoPreviewRows, setPhotoPreviewRows] = useState<Array<{
     key: string
     extractedCourseName: string
@@ -186,14 +267,110 @@ export function GradesPage() {
     parsedRows: number
     unparsedRows: number
   } | null>(null)
+  const localCelebrationGateRef = useRef<Map<string, number>>(new Map())
 
   const openShkoloCreateCourseDialog = (rowKey: string, initialName: string) => {
     setShkoloCreateCourseRowKey(rowKey)
     setShkoloCreateCourseName(initialName)
   }
 
+  const closeShkoloCreateCourseDialog = () => {
+    setShkoloCreateCourseRowKey(null)
+    setShkoloCreateCourseName('')
+  }
+
+  const serializeGradeList = (values: number[]) => values.map((value) => String(value)).join(', ')
+
+  const updateShkoloCurrentGrades = (
+    rowKey: string,
+    field: 'term1Current' | 'term2Current',
+    updater: (values: number[]) => number[],
+  ) => {
+    setShkoloPreviewRows((current) =>
+      current.map((row) => {
+        if (row.key !== rowKey) return row
+        const next = updater(parseGradeListText(row[field]))
+        return {
+          ...row,
+          [field]: serializeGradeList(next),
+        }
+      }),
+    )
+  }
+
+  const startShkoloMoveGrade = (
+    fromRowKey: string,
+    sourceField: 'term1Current' | 'term2Current',
+    gradeIndex: number,
+    gradeValue: number,
+  ) => {
+    setShkoloMoveGradeDialog({
+      fromRowKey,
+      sourceField,
+      gradeIndex,
+      gradeValue,
+    })
+    setShkoloMoveGradeTargetRowKey('')
+  }
+
+  const downloadShkoloDebugJson = () => {
+    if (!shkoloMeta?.debug) return
+    const payload = {
+      fileName: shkoloMeta.fileName,
+      debug: shkoloMeta.debug,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `shkolo-debug-${Date.now()}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const buildPreferencesPayload = (ignoredShkoloSubjects: string[]): UpdatePreferencesDto | null => {
+    const me = meQuery.data
+    if (!me) return null
+    const targetByWeekday = new Map(me.targets.map((item) => [item.weekday, item.targetMinutes]))
+
+    return {
+      settings: {
+        cutoffTime: me.settings?.cutoffTime ?? '05:00',
+        soundsEnabled: me.settings?.soundsEnabled ?? true,
+        shortSessionMinutes: me.settings?.shortSessionMinutes ?? 10,
+        longSessionMinutes: me.settings?.longSessionMinutes ?? 50,
+        breakSessionMinutes: me.settings?.breakSessionMinutes ?? 25,
+        adaptiveEnabled: me.settings?.adaptiveEnabled ?? true,
+        riskEnabled: me.settings?.riskEnabled ?? true,
+        riskThresholdMode: me.settings?.riskThresholdMode ?? 'score',
+        riskScoreThreshold: me.settings?.riskScoreThreshold ?? 70,
+        riskGradeThresholdByScale: {
+          bulgarian: me.settings?.riskGradeThresholdByScale?.bulgarian ?? 4.5,
+          german: me.settings?.riskGradeThresholdByScale?.german ?? 3.5,
+          percentage: me.settings?.riskGradeThresholdByScale?.percentage ?? 70,
+        },
+        riskLookback: me.settings?.riskLookback ?? 'currentTerm',
+        riskMinDataPoints: me.settings?.riskMinDataPoints ?? 2,
+        riskUseTermFinalIfAvailable: me.settings?.riskUseTermFinalIfAvailable ?? true,
+        riskShowOnlyIfBelowThreshold: me.settings?.riskShowOnlyIfBelowThreshold ?? true,
+        celebrationEnabled: me.settings?.celebrationEnabled ?? true,
+        celebrationScoreThreshold: me.settings?.celebrationScoreThreshold ?? 90,
+        celebrationCooldownHours: me.settings?.celebrationCooldownHours ?? 24,
+        celebrationShowFor: me.settings?.celebrationShowFor ?? 'all',
+      },
+      targets: weekdays.map((weekday) => ({
+        weekday,
+        targetMinutes: targetByWeekday.get(weekday) ?? 90,
+      })),
+      uiPreferences: me.uiPreferences,
+      ignoredShkoloSubjects,
+    }
+  }
+
   const rematchShkoloRow = (rowKey: string, extractedSubject: string) => {
-    const [match] = matchExtractedCoursesToUserCourses([extractedSubject], courses)
+    const [match] = matchExtractedCoursesToUserCourses([extractedSubject], courses, {
+      threshold: SHKOLO_UNMATCHED_THRESHOLD,
+    })
     setShkoloPreviewRows((current) =>
       current.map((row) =>
         row.key === rowKey
@@ -202,6 +379,7 @@ export function GradesPage() {
               courseId: match?.matchedCourseId ?? '',
               matchedCourseName: match?.matchedCourseName ?? '',
               matchScore: match?.score ?? 0,
+              matchDebug: match?.debug ?? null,
             }
           : row,
       ),
@@ -209,18 +387,75 @@ export function GradesPage() {
   }
 
   const removeShkoloRow = (rowKey: string) => {
-    const confirmed = window.confirm('Remove this subject from import?')
-    if (!confirmed) return
-    if (shkoloCreateCourseRowKey === rowKey) {
-      setShkoloCreateCourseRowKey(null)
-      setShkoloCreateCourseName('')
+    setShkoloRemoveRowKey(rowKey)
+    setShkoloAlwaysIgnoreSubject(false)
+  }
+
+  const saveShkoloSubjectNameEdit = (rowKey: string) => {
+    const nextName = shkoloEditingSubjectValue.trim()
+    if (!nextName) return
+    setShkoloPreviewRows((current) =>
+      current.map((row) => (row.key === rowKey ? { ...row, subjectName: nextName } : row)),
+    )
+    rematchShkoloRow(rowKey, nextName)
+    setShkoloEditingSubjectRowKey(null)
+    setShkoloEditingSubjectValue('')
+  }
+
+  const confirmShkoloMoveGrade = () => {
+    const moving = shkoloMoveGradeDialog
+    if (!moving || !shkoloMoveGradeTargetRowKey) return
+    if (moving.fromRowKey === shkoloMoveGradeTargetRowKey) {
+      setShkoloMoveGradeDialog(null)
+      setShkoloMoveGradeTargetRowKey('')
+      return
     }
-    setShkoloPreviewRows((current) => {
-      const exists = current.some((row) => row.key === rowKey)
-      if (!exists) return current
-      setShkoloRemovedRowsCount((count) => count + 1)
-      return current.filter((row) => row.key !== rowKey)
-    })
+
+    updateShkoloCurrentGrades(moving.fromRowKey, moving.sourceField, (values) =>
+      values.filter((_, index) => index !== moving.gradeIndex),
+    )
+    updateShkoloCurrentGrades(shkoloMoveGradeTargetRowKey, moving.sourceField, (values) => [
+      ...values,
+      moving.gradeValue,
+    ])
+
+    setShkoloMoveGradeDialog(null)
+    setShkoloMoveGradeTargetRowKey('')
+  }
+
+  const confirmRemoveShkoloRow = async () => {
+    if (!shkoloRemoveRowKey) return
+    const row = shkoloPreviewRows.find((item) => item.key === shkoloRemoveRowKey)
+    if (!row) {
+      setShkoloRemoveRowKey(null)
+      setShkoloAlwaysIgnoreSubject(false)
+      return
+    }
+
+    if (shkoloCreateCourseRowKey === row.key) {
+      closeShkoloCreateCourseDialog()
+    }
+
+    if (shkoloAlwaysIgnoreSubject) {
+      const existing = meQuery.data?.ignoredShkoloSubjects ?? []
+      const merged = Array.from(
+        new Set([...existing, row.subjectName.trim()].filter(Boolean).map((item) => item.trim())),
+      )
+      try {
+        await saveIgnoredShkoloSubjectsMutation.mutateAsync(merged)
+      } catch {
+        toast({
+          variant: 'error',
+          title: 'Could not save ignore rule',
+          description: 'Subject will be removed from this import only.',
+        })
+      }
+    }
+
+    setShkoloPreviewRows((current) => current.filter((item) => item.key !== row.key))
+    setShkoloRemovedRowsCount((count) => count + 1)
+    setShkoloRemoveRowKey(null)
+    setShkoloAlwaysIgnoreSubject(false)
   }
 
   const termsQuery = useQuery({
@@ -230,6 +465,10 @@ export function GradesPage() {
   const coursesQuery = useQuery({
     queryKey: ['courses'],
     queryFn: ({ signal }) => getCourses(signal),
+  })
+  const meQuery = useQuery({
+    queryKey: ['me'],
+    queryFn: ({ signal }) => getMe(signal),
   })
   const gradesQuery = useQuery({
     queryKey: ['grades', selectedTermId],
@@ -247,22 +486,48 @@ export function GradesPage() {
     enabled: Boolean(gradeForm.courseId),
   })
   const summaryQuery = useQuery({
-    queryKey: ['grades-summary', selectedTermId],
-    queryFn: ({ signal }) => getGradesSummary(selectedTermId, signal),
+    queryKey: ['grades-summary', selectedTermId, summaryDisplayScale, includeTermGradeInAverage],
+    queryFn: ({ signal }) =>
+      getGradesSummary(
+        selectedTermId,
+        {
+          displayScale: summaryDisplayScale,
+          includeTermGrade: includeTermGradeInAverage,
+        },
+        signal,
+      ),
     enabled: Boolean(selectedTermId),
   })
   const targetsQuery = useQuery({
     queryKey: ['grade-targets'],
     queryFn: ({ signal }) => getGradeTargets(signal),
   })
-  const recommendationsQuery = useQuery({
-    queryKey: ['study-recommendations', selectedTermId],
-    queryFn: ({ signal }) => getStudyRecommendations({ termId: selectedTermId }, signal),
-    enabled: Boolean(selectedTermId),
-  })
   const academicRiskQuery = useQuery({
-    queryKey: ['academic-risk', selectedTermId],
-    queryFn: ({ signal }) => getAcademicRisk({ termId: selectedTermId }, signal),
+    queryKey: [
+      'academic-risk',
+      selectedTermId,
+      summaryDisplayScale,
+      includeTermGradeInAverage,
+      meQuery.data?.settings?.riskEnabled,
+      meQuery.data?.settings?.riskThresholdMode,
+      meQuery.data?.settings?.riskScoreThreshold,
+      meQuery.data?.settings?.riskLookback,
+      meQuery.data?.settings?.riskMinDataPoints,
+      meQuery.data?.settings?.riskUseTermFinalIfAvailable,
+      meQuery.data?.settings?.riskShowOnlyIfBelowThreshold,
+      meQuery.data?.settings?.riskGradeThresholdByScale?.bulgarian,
+      meQuery.data?.settings?.riskGradeThresholdByScale?.german,
+      meQuery.data?.settings?.riskGradeThresholdByScale?.percentage,
+    ],
+    queryFn: ({ signal }) =>
+      getAcademicRisk(
+        {
+          termId: selectedTermId,
+          displayScale: summaryDisplayScale,
+          includeTermGrade: includeTermGradeInAverage,
+        },
+        signal,
+      ),
     enabled: Boolean(selectedTermId),
   })
   const whatIfQuery = useQuery({
@@ -283,6 +548,73 @@ export function GradesPage() {
       Boolean(whatIfForm.categoryId) &&
       whatIfForm.gradeValue.trim().length > 0,
   })
+  const celebrationStateQuery = useQuery({
+    queryKey: ['celebrations-state'],
+    queryFn: ({ signal }) => getCelebrationState(signal),
+  })
+
+  const getCourseAverageScoreMap = (items: GradeItemDto[]) => {
+    const byCourse = new Map<string, { weighted: number; totalWeight: number }>()
+    for (const item of items) {
+      const weight = Math.max(0.05, Number(item.weight || 1))
+      const current = byCourse.get(item.courseId) ?? { weighted: 0, totalWeight: 0 }
+      current.weighted += Number(item.performanceScore) * weight
+      current.totalWeight += weight
+      byCourse.set(item.courseId, current)
+    }
+    return new Map(
+      Array.from(byCourse.entries()).map(([courseId, value]) => [
+        courseId,
+        value.totalWeight > 0 ? value.weighted / value.totalWeight : 0,
+      ]),
+    )
+  }
+
+  const canTriggerCelebration = (
+    type: 'gradeItem' | 'termFinal' | 'courseAverage',
+    courseId: string,
+    score: number,
+  ) => {
+    const settings = meQuery.data?.settings
+    const state = celebrationStateQuery.data
+    if (!(settings?.celebrationEnabled ?? true)) return false
+    const threshold = settings?.celebrationScoreThreshold ?? 90
+    if (!Number.isFinite(score) || score < threshold) return false
+    const showFor = settings?.celebrationShowFor ?? 'all'
+    if (showFor !== 'all' && showFor !== type) return false
+    const cooldownHours = settings?.celebrationCooldownHours ?? 24
+    const record = state?.records.find((item) => item.courseId === courseId)
+    const persistedAt = record?.lastCelebratedAt ? new Date(record.lastCelebratedAt).getTime() : 0
+    const localAt = localCelebrationGateRef.current.get(courseId) ?? 0
+    const lastAt = Math.max(persistedAt, localAt)
+    if (!lastAt) return true
+    const diffMs = Date.now() - lastAt
+    return diffMs >= cooldownHours * 60 * 60 * 1000
+  }
+
+  const triggerCelebration = async (payload: {
+    type: 'gradeItem' | 'termFinal' | 'courseAverage'
+    courseId: string
+    score: number
+    gradeValue?: number | null
+    termId?: string
+    message?: string
+  }) => {
+    if (!canTriggerCelebration(payload.type, payload.courseId, payload.score)) return
+    const courseName =
+      courses.find((course) => course.id === payload.courseId)?.name ?? payload.courseId
+    notifyCelebration({
+      ...payload,
+      courseName,
+    })
+    localCelebrationGateRef.current.set(payload.courseId, Date.now())
+    await recordCelebration({
+      courseId: payload.courseId,
+      score: payload.score,
+      type: payload.type,
+    })
+    queryClient.invalidateQueries({ queryKey: ['celebrations-state'] })
+  }
 
   useEffect(() => {
     const terms = termsQuery.data ?? []
@@ -303,14 +635,89 @@ export function GradesPage() {
       await queryClient.invalidateQueries({ queryKey: ['grades-summary'] })
     },
   })
+  const deleteTermGradesMutation = useMutation({
+    mutationFn: deleteAllGradesForTerm,
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['study-recommendations', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['academic-risk', selectedTermId] })
+      setDeleteTermGradesConfirmOpen(false)
+      setDeleteTermGradesConfirmText('')
+      toast({
+        variant: 'success',
+        title: 'Term grades deleted',
+        description: `Deleted ${result.deletedCount} grade item${result.deletedCount === 1 ? '' : 's'}.`,
+      })
+    },
+    onError: () => {
+      toast({
+        variant: 'error',
+        title: 'Could not delete term grades',
+      })
+    },
+  })
 
   const createGradeMutation = useMutation({
     mutationFn: createGrade,
-    onSuccess: async () => {
+    onSuccess: async (created) => {
+      const beforeAverage = currentCourseAverageScoreMap.get(created.courseId) ?? null
       await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
       await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      const refreshed = await getGrades({ termId: selectedTermId })
+      const afterAverage = getCourseAverageScoreMap(refreshed).get(created.courseId) ?? null
       setAddGradeOpen(false)
       setGradeForm((current) => ({ ...current, gradeValue: '', note: '' }))
+
+      const itemScore = gradeToNormalizedScore(created.scale, created.gradeValue)
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+      const eligibleByType = created.isFinal
+        ? itemScore >= threshold && isExcellentTermFinal(created.scale, created.gradeValue)
+        : itemScore >= threshold
+      if (eligibleByType) {
+        await triggerCelebration({
+          type: created.isFinal ? 'termFinal' : 'gradeItem',
+          courseId: created.courseId,
+          score: itemScore,
+          gradeValue: created.gradeValue,
+          termId: created.termId,
+          message: created.isFinal ? 'Excellent final grade recorded.' : 'Excellent grade added.',
+        })
+      }
+
+      if (beforeAverage != null && afterAverage != null) {
+        if (beforeAverage < threshold && afterAverage >= threshold) {
+          await triggerCelebration({
+            type: 'courseAverage',
+            courseId: created.courseId,
+            score: afterAverage,
+            termId: created.termId,
+            message: 'Course average crossed your excellence threshold.',
+          })
+        }
+      }
+    },
+  })
+  const updateCourseMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => updateCourse(id, { name }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['courses'] })
+      await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['study-recommendations', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['academic-risk', selectedTermId] })
+      setEditingCourseNameId(null)
+      setEditingCourseNameValue('')
+      toast({
+        variant: 'success',
+        title: 'Course renamed',
+      })
+    },
+    onError: () => {
+      toast({
+        variant: 'error',
+        title: 'Could not rename course',
+      })
     },
   })
 
@@ -319,6 +726,45 @@ export function GradesPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
       await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      toast({
+        variant: 'success',
+        title: 'Grade deleted',
+      })
+    },
+    onError: () => {
+      toast({
+        variant: 'error',
+        title: 'Could not delete grade',
+      })
+    },
+  })
+  const updateGradeMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof updateGrade>[1] }) =>
+      updateGrade(id, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      toast({
+        variant: 'success',
+        title: 'Grade updated',
+      })
+    },
+  })
+  const deleteManyGradesMutation = useMutation({
+    mutationFn: async (ids: string[]) => Promise.all(ids.map((id) => deleteGrade(id))),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
+      await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
+      toast({
+        variant: 'success',
+        title: 'Grades deleted',
+      })
+    },
+    onError: () => {
+      toast({
+        variant: 'error',
+        title: 'Could not delete grades',
+      })
     },
   })
   const createCategoryMutation = useMutation({
@@ -413,7 +859,32 @@ export function GradesPage() {
   })
   const bulkImportMutation = useMutation({
     mutationFn: bulkImportGrades,
-    onSuccess: async (result) => {
+    onMutate: async (payload) => {
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+      const preparedItems = payload.items
+        .map((item) => {
+          const score = gradeToNormalizedScore(payload.scale, item.gradeValue)
+          const isTermFinalItem = Boolean(item.isFinal)
+          const excellentFinal = isTermFinalItem && isExcellentTermFinal(payload.scale, item.gradeValue)
+          if (isTermFinalItem) {
+            if (!(score >= threshold && excellentFinal)) return null
+          } else if (score < threshold) {
+            return null
+          }
+          return {
+            courseId: item.courseId,
+            score,
+            gradeValue: item.gradeValue,
+            type: (isTermFinalItem ? 'termFinal' : 'gradeItem') as 'gradeItem' | 'termFinal',
+          }
+        })
+        .filter((item): item is { courseId: string; score: number; gradeValue: number; type: 'gradeItem' | 'termFinal' } => item != null)
+      lastBulkImportContextRef.current = {
+        beforeAverageMap: new Map(currentCourseAverageScoreMap),
+        items: preparedItems,
+      }
+    },
+    onSuccess: async (result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
       await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
       setImportOpen(false)
@@ -422,6 +893,50 @@ export function GradesPage() {
         variant: 'success',
         title: 'Grades imported',
         description: `Imported ${result.count} grade item${result.count === 1 ? '' : 's'}.`,
+      })
+
+      const context = lastBulkImportContextRef.current
+      lastBulkImportContextRef.current = null
+      if (!context || !context.items.length) return
+
+      const refreshed = await getGrades({ termId: variables.termId })
+      const afterAverageMap = getCourseAverageScoreMap(refreshed)
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+      const crossingCandidates = Array.from(
+        new Set(context.items.map((item) => item.courseId)),
+      )
+        .map((courseId) => {
+          const before = context.beforeAverageMap.get(courseId)
+          const after = afterAverageMap.get(courseId)
+          if (before == null || after == null) return null
+          if (before < threshold && after >= threshold) {
+            return {
+              type: 'courseAverage' as const,
+              courseId,
+              score: after,
+              gradeValue: null,
+              delta: after - before,
+            }
+          }
+          return null
+        })
+        .filter((item): item is { type: 'courseAverage'; courseId: string; score: number; gradeValue: null; delta: number } => item != null)
+
+      const itemCandidates = context.items.map((item) => ({
+        ...item,
+        delta: 0,
+      }))
+      const best = [...itemCandidates, ...crossingCandidates].sort((a, b) => {
+        if (b.delta !== a.delta) return b.delta - a.delta
+        return b.score - a.score
+      })[0]
+      if (!best) return
+      await triggerCelebration({
+        type: best.type,
+        courseId: best.courseId,
+        score: best.score,
+        gradeValue: best.gradeValue,
+        termId: variables.termId,
       })
     },
   })
@@ -440,12 +955,23 @@ export function GradesPage() {
                 courseId: created.id,
                 matchedCourseName: created.name,
                 matchScore: 1,
+                matchDebug: {
+                  normalizedExtracted: row.subjectName.normalize('NFKD').toLowerCase(),
+                  normalizedCandidate: created.name.normalize('NFKD').toLowerCase(),
+                  levenshteinDistance: 0,
+                  tokenScore: 1,
+                  charScore: 1,
+                  overlapBonus: 0,
+                  threshold: SHKOLO_UNMATCHED_THRESHOLD,
+                  formula: 'manually created course assigned',
+                },
               }
             : row,
         ),
       )
-      setShkoloCreateCourseRowKey((current) => (current === rowKey ? null : current))
-      setShkoloCreateCourseName('')
+      if (shkoloCreateCourseRowKey === rowKey) {
+        closeShkoloCreateCourseDialog()
+      }
       toast({
         variant: 'success',
         title: 'Course created',
@@ -460,6 +986,63 @@ export function GradesPage() {
       })
     },
   })
+  const saveIgnoredShkoloSubjectsMutation = useMutation({
+    mutationFn: async (subjects: string[]) => {
+      const payload = buildPreferencesPayload(subjects)
+      if (!payload) throw new Error('Could not load user preferences.')
+      return updatePreferences(payload)
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['me'], updated)
+    },
+  })
+  const disableCelebrationsMutation = useMutation({
+    mutationFn: async () => {
+      const me = meQuery.data
+      if (!me) throw new Error('Could not load user preferences.')
+      const targetByWeekday = new Map(me.targets.map((item) => [item.weekday, item.targetMinutes]))
+      const payload: UpdatePreferencesDto = {
+        settings: {
+          cutoffTime: me.settings?.cutoffTime ?? '05:00',
+          soundsEnabled: me.settings?.soundsEnabled ?? true,
+          shortSessionMinutes: me.settings?.shortSessionMinutes ?? 10,
+          longSessionMinutes: me.settings?.longSessionMinutes ?? 50,
+          breakSessionMinutes: me.settings?.breakSessionMinutes ?? 25,
+          adaptiveEnabled: me.settings?.adaptiveEnabled ?? true,
+          riskEnabled: me.settings?.riskEnabled ?? true,
+          riskThresholdMode: me.settings?.riskThresholdMode ?? 'score',
+          riskScoreThreshold: me.settings?.riskScoreThreshold ?? 70,
+          riskGradeThresholdByScale: {
+            bulgarian: me.settings?.riskGradeThresholdByScale?.bulgarian ?? 4.5,
+            german: me.settings?.riskGradeThresholdByScale?.german ?? 3.5,
+            percentage: me.settings?.riskGradeThresholdByScale?.percentage ?? 70,
+          },
+          riskLookback: me.settings?.riskLookback ?? 'currentTerm',
+          riskMinDataPoints: me.settings?.riskMinDataPoints ?? 2,
+          riskUseTermFinalIfAvailable: me.settings?.riskUseTermFinalIfAvailable ?? true,
+          riskShowOnlyIfBelowThreshold: me.settings?.riskShowOnlyIfBelowThreshold ?? true,
+          celebrationEnabled: false,
+          celebrationScoreThreshold: me.settings?.celebrationScoreThreshold ?? 90,
+          celebrationCooldownHours: me.settings?.celebrationCooldownHours ?? 24,
+          celebrationShowFor: me.settings?.celebrationShowFor ?? 'all',
+        },
+        targets: weekdays.map((weekday) => ({
+          weekday,
+          targetMinutes: targetByWeekday.get(weekday) ?? 90,
+        })),
+        uiPreferences: me.uiPreferences,
+        ignoredShkoloSubjects: me.ignoredShkoloSubjects ?? [],
+      }
+      return updatePreferences(payload)
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['me'], updated)
+      toast({
+        variant: 'default',
+        title: 'Celebrations disabled',
+      })
+    },
+  })
   const shkoloExtractMutation = useMutation({
     mutationFn: async () => {
       if (!shkoloForm.file) return null
@@ -469,16 +1052,27 @@ export function GradesPage() {
       if (!result) return
 
       setShkoloRemovedRowsCount(0)
-      setShkoloCreateCourseRowKey(null)
-      setShkoloCreateCourseName('')
+      closeShkoloCreateCourseDialog()
+      setShkoloEditingSubjectRowKey(null)
+      setShkoloEditingSubjectValue('')
+      setShkoloMoveGradeDialog(null)
+      setShkoloMoveGradeTargetRowKey('')
+      setShkoloSaveConfirmOpen(false)
+      setShkoloRemoveRowKey(null)
+      setShkoloAlwaysIgnoreSubject(false)
       const matches = matchExtractedCoursesToUserCourses(
         result.rows.map((row) => row.extractedSubject),
         courses,
+        { threshold: SHKOLO_UNMATCHED_THRESHOLD },
       )
 
       const currentGradesCount = result.rows.reduce((sum, row) => sum + row.currentGrades.length, 0)
       const termGradesFoundCount = result.rows.reduce(
-        (sum, row) => sum + (row.term1 == null ? 0 : 1) + (row.term2 == null ? 0 : 1),
+        (sum, row) =>
+          sum +
+          ((row.t1FinalGrade ?? row.term1) == null ? 0 : 1) +
+          ((row.t2FinalGrade ?? row.term2) == null ? 0 : 1) +
+          (row.yearFinalGrade == null ? 0 : 1),
         0,
       )
 
@@ -490,6 +1084,7 @@ export function GradesPage() {
         currentGradesCount,
         termGradesFoundCount,
         skippedLines: result.skippedLines,
+        parseWarnings: result.parseWarnings ?? [],
         debug: result.debug,
       })
 
@@ -502,11 +1097,14 @@ export function GradesPage() {
             courseId: match?.matchedCourseId ?? '',
             matchedCourseName: match?.matchedCourseName ?? '',
             matchScore: match?.score ?? 0,
-            term1Final: row.term1 == null ? '' : String(row.term1),
-            term2Final: row.term2 == null ? '' : String(row.term2),
-            yearFinal: '',
-            term1Current: row.currentGrades.join(', '),
-            term2Current: '',
+            matchDebug: match?.debug ?? null,
+            term1Final: row.t1FinalGrade == null ? (row.term1 == null ? '' : String(row.term1)) : String(row.t1FinalGrade),
+            term2Final: row.t2FinalGrade == null ? (row.term2 == null ? '' : String(row.term2)) : String(row.t2FinalGrade),
+            yearFinal: row.yearFinalGrade == null ? '' : String(row.yearFinalGrade),
+            term1Current: (row.t1CurrentGrades ?? row.currentGrades).join(', '),
+            term2Current: (row.t2CurrentGrades ?? []).join(', '),
+            rawRowText: row.rawRowText ?? '',
+            parseWarnings: row.parseWarnings ?? [],
           }
         }),
       )
@@ -515,6 +1113,7 @@ export function GradesPage() {
   const shkoloImportSaveMutation = useMutation({
     mutationFn: async () => {
       if (!shkoloForm.targetTermId) return 0
+      const beforeAverageMap = new Map(currentCourseAverageScoreMap)
 
       const categoryCache = new Map<string, { currentId: string; termGradeId: string }>()
       const importMetadata = {
@@ -558,6 +1157,13 @@ export function GradesPage() {
         finalType?: 'TERM1' | 'TERM2' | 'YEAR' | null
         importMetadata?: Record<string, unknown> | null
       }> = []
+      const celebrationCandidates: Array<{
+        courseId: string
+        score: number
+        gradeValue: number
+        type: 'gradeItem' | 'termFinal'
+      }> = []
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
 
       for (const row of shkoloPreviewRows) {
         if (!row.courseId) continue
@@ -575,6 +1181,15 @@ export function GradesPage() {
               isFinal: false,
               importMetadata,
             })
+            const score = gradeToNormalizedScore(shkoloForm.scale, value)
+            if (score >= threshold) {
+              celebrationCandidates.push({
+                courseId: row.courseId,
+                score,
+                gradeValue: value,
+                type: 'gradeItem',
+              })
+            }
           }
         }
 
@@ -590,32 +1205,83 @@ export function GradesPage() {
             finalType: shkoloForm.termGradeSource === 'term1' ? 'TERM1' : 'TERM2',
             importMetadata,
           })
+          const score = gradeToNormalizedScore(shkoloForm.scale, finalValue)
+          if (score >= threshold && isExcellentTermFinal(shkoloForm.scale, finalValue)) {
+            celebrationCandidates.push({
+              courseId: row.courseId,
+              score,
+              gradeValue: finalValue,
+              type: 'termFinal',
+            })
+          }
         }
       }
 
-      if (!items.length) return 0
+      if (!items.length) return { count: 0, beforeAverageMap, celebrationCandidates }
       const result = await bulkImportGrades({
         termId: shkoloForm.targetTermId,
         scale: shkoloForm.scale,
         gradedOn: shkoloForm.gradedOn,
         items,
       })
-      return result.count
+      return { count: result.count, beforeAverageMap, celebrationCandidates }
     },
-    onSuccess: async (count) => {
+    onSuccess: async (payload) => {
+      const count = typeof payload === 'number' ? payload : payload.count
       await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
       await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
       setImportOpen(false)
       setImportMode('text')
       setShkoloPreviewRows([])
       setShkoloMeta(null)
+      closeShkoloCreateCourseDialog()
+      setShkoloEditingSubjectRowKey(null)
+      setShkoloEditingSubjectValue('')
+      setShkoloMoveGradeDialog(null)
+      setShkoloMoveGradeTargetRowKey('')
+      setShkoloSaveConfirmOpen(false)
       setShkoloRemovedRowsCount(0)
+      setShkoloRemoveRowKey(null)
+      setShkoloAlwaysIgnoreSubject(false)
       setShkoloForm((current) => ({ ...current, file: null }))
       toast({
         variant: 'success',
         title: 'Shkolo PDF import complete',
         description: `Imported ${count} grade item${count === 1 ? '' : 's'}.`,
       })
+
+      if (typeof payload !== 'number' && payload.celebrationCandidates.length > 0) {
+        const refreshed = await getGrades({ termId: shkoloForm.targetTermId })
+        const afterAverageMap = getCourseAverageScoreMap(refreshed)
+        const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+        const crossingCandidates = Array.from(
+          new Set(payload.celebrationCandidates.map((item) => item.courseId)),
+        )
+          .map((courseId) => {
+            const before = payload.beforeAverageMap.get(courseId)
+            const after = afterAverageMap.get(courseId)
+            if (before == null || after == null) return null
+            if (before < threshold && after >= threshold) {
+              return { type: 'courseAverage' as const, courseId, score: after, gradeValue: null, delta: after - before }
+            }
+            return null
+          })
+          .filter((item): item is { type: 'courseAverage'; courseId: string; score: number; gradeValue: null; delta: number } => item != null)
+
+        const best = [
+          ...payload.celebrationCandidates.map((item) => ({ ...item, delta: 0 })),
+          ...crossingCandidates,
+        ].sort((a, b) => (b.delta !== a.delta ? b.delta - a.delta : b.score - a.score))[0]
+        if (best) {
+          await triggerCelebration({
+            type: best.type,
+            courseId: best.courseId,
+            score: best.score,
+            gradeValue: best.gradeValue,
+            termId: shkoloForm.targetTermId,
+          })
+        }
+      }
     },
   })
   const photoExtractMutation = useMutation({
@@ -703,7 +1369,26 @@ export function GradesPage() {
   })
   const photoImportSaveMutation = useMutation({
     mutationFn: bulkImportGrades,
-    onSuccess: async (result) => {
+    onMutate: async (payload) => {
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+      const items = payload.items
+        .map((item) => {
+          const score = gradeToNormalizedScore(payload.scale, item.gradeValue)
+          if (score < threshold) return null
+          return {
+            courseId: item.courseId,
+            score,
+            gradeValue: item.gradeValue,
+            type: 'gradeItem' as const,
+          }
+        })
+        .filter((item): item is { courseId: string; score: number; gradeValue: number; type: 'gradeItem' } => item != null)
+      lastBulkImportContextRef.current = {
+        beforeAverageMap: new Map(currentCourseAverageScoreMap),
+        items,
+      }
+    },
+    onSuccess: async (result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['grades', selectedTermId] })
       await queryClient.invalidateQueries({ queryKey: ['grades-summary', selectedTermId] })
       setImportPhotoOpen(false)
@@ -715,6 +1400,39 @@ export function GradesPage() {
         title: 'Photo import complete',
         description: `Imported ${result.count} grade item${result.count === 1 ? '' : 's'}.`,
       })
+
+      const context = lastBulkImportContextRef.current
+      lastBulkImportContextRef.current = null
+      if (!context || !context.items.length) return
+      const refreshed = await getGrades({ termId: variables.termId })
+      const afterAverageMap = getCourseAverageScoreMap(refreshed)
+      const threshold = meQuery.data?.settings?.celebrationScoreThreshold ?? 90
+      const crossingCandidates = Array.from(
+        new Set(context.items.map((item) => item.courseId)),
+      )
+        .map((courseId) => {
+          const before = context.beforeAverageMap.get(courseId)
+          const after = afterAverageMap.get(courseId)
+          if (before == null || after == null) return null
+          if (before < threshold && after >= threshold) {
+            return { type: 'courseAverage' as const, courseId, score: after, gradeValue: null, delta: after - before }
+          }
+          return null
+        })
+        .filter((item): item is { type: 'courseAverage'; courseId: string; score: number; gradeValue: null; delta: number } => item != null)
+
+      const best = [
+        ...context.items.map((item) => ({ ...item, delta: 0 })),
+        ...crossingCandidates,
+      ].sort((a, b) => (b.delta !== a.delta ? b.delta - a.delta : b.score - a.score))[0]
+      if (!best) return
+      await triggerCelebration({
+        type: best.type,
+        courseId: best.courseId,
+        score: best.score,
+        gradeValue: best.gradeValue,
+        termId: variables.termId,
+      })
     },
   })
 
@@ -725,9 +1443,36 @@ export function GradesPage() {
   const addGradeCategories = addGradeCategoriesQuery.data ?? []
   const summary = summaryQuery.data
   const targets = targetsQuery.data ?? []
-  const recommendations = recommendationsQuery.data ?? []
   const academicRisk = academicRiskQuery.data ?? []
+  const currentCourseAverageScoreMap = useMemo(() => getCourseAverageScoreMap(grades), [grades])
+  const lastBulkImportContextRef = useRef<{
+    beforeAverageMap: Map<string, number>
+    items: Array<{
+      courseId: string
+      score: number
+      gradeValue?: number | null
+      type: 'gradeItem' | 'termFinal'
+    }>
+  } | null>(null)
   const riskByCourseId = useMemo(() => new Map(academicRisk.map((item) => [item.courseId, item])), [academicRisk])
+  const riskSettings = meQuery.data?.settings
+  const needsAttentionItems = useMemo(
+    () => academicRisk.filter((item) => item.riskLevel !== 'low'),
+    [academicRisk],
+  )
+  const needsAttentionCaption = useMemo(() => {
+    const lookback = riskSettings?.riskLookback ?? 'currentTerm'
+    const mode = riskSettings?.riskThresholdMode ?? 'score'
+    const threshold =
+      mode === 'score'
+        ? `${(riskSettings?.riskScoreThreshold ?? 70).toFixed(1)} score`
+        : `${formatAverageValue(
+            summaryDisplayScale,
+            riskSettings?.riskGradeThresholdByScale?.[summaryDisplayScale] ??
+              (summaryDisplayScale === 'bulgarian' ? 4.5 : summaryDisplayScale === 'german' ? 3.5 : 70),
+          )}`
+    return `Based on ${lookback} and threshold ${threshold}.`
+  }, [riskSettings, summaryDisplayScale])
 
   useEffect(() => {
     if (!terms.length || !selectedTermId) return
@@ -771,6 +1516,10 @@ export function GradesPage() {
     () => courses.find((course) => course.id === selectedCourseId)?.name ?? '',
     [courses, selectedCourseId],
   )
+  const selectedCourseForRename = useMemo(
+    () => courses.find((course) => course.id === selectedCourseId) ?? null,
+    [courses, selectedCourseId],
+  )
   const categoryGradebookRows = useMemo(() => {
     return gradeCategories.map((category) => {
       const categoryItems = selectedCourseGrades.filter((item) => item.categoryId === category.id)
@@ -792,6 +1541,14 @@ export function GradesPage() {
   }, [categoryGradebookRows, selectedCourseAverage])
 
   useEffect(() => {
+    if (!selectedCourseId || editingCourseNameId == null) return
+    if (editingCourseNameId !== selectedCourseId) {
+      setEditingCourseNameId(null)
+      setEditingCourseNameValue('')
+    }
+  }, [editingCourseNameId, selectedCourseId])
+
+  useEffect(() => {
     if (!selectedTarget) return
     setTargetForm({
       scale: selectedTarget.scale,
@@ -809,6 +1566,7 @@ export function GradesPage() {
           : gradeCategories[0]?.id ?? '',
     }))
   }, [gradeCategories])
+
 
   const importPreview = useMemo(() => {
     const lines = importForm.rawText
@@ -862,6 +1620,16 @@ export function GradesPage() {
   }).length
   const canImportShkolo =
     shkoloPreviewRows.length > 0 && shkoloReadyRowsCount > 0
+  const shkoloLowConfidenceRows = shkoloPreviewRows.filter(
+    (row) => row.matchScore < SHKOLO_UNMATCHED_THRESHOLD,
+  )
+  const hasShkoloLowConfidenceRows = shkoloLowConfidenceRows.length > 0
+  const shkoloRemoveCandidate = shkoloRemoveRowKey
+    ? shkoloPreviewRows.find((row) => row.key === shkoloRemoveRowKey) ?? null
+    : null
+  const shkoloCreateCourseCandidate = shkoloCreateCourseRowKey
+    ? shkoloPreviewRows.find((row) => row.key === shkoloCreateCourseRowKey) ?? null
+    : null
 
   const onAddGrade = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -880,6 +1648,15 @@ export function GradesPage() {
 
   return (
     <PageContainer>
+      <CelebrationOverlay
+        onViewDetails={(payload) => {
+          if (payload.termId && payload.termId !== selectedTermId) {
+            setSelectedTermId(payload.termId)
+          }
+          setSelectedCourseId(payload.courseId)
+        }}
+        onDisable={() => disableCelebrationsMutation.mutate()}
+      />
       <PageHeader
         title={
           <span className="inline-flex items-center gap-2">
@@ -914,7 +1691,7 @@ export function GradesPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <CardTitle className="text-base">Term Gradebook</CardTitle>
-                <CardDescription>Course | Grade | Weight | Date | Notes</CardDescription>
+                <CardDescription>One row per subject with inline grade chips and quick actions.</CardDescription>
               </div>
               <div className="flex items-center gap-2">
                 <select
@@ -932,6 +1709,18 @@ export function GradesPage() {
                   ))}
                 </select>
                 {selectedTermId ? (
+                  <Button
+                    variant="outline"
+                    className="text-destructive"
+                    onClick={() => {
+                      setDeleteTermGradesConfirmOpen(true)
+                      setDeleteTermGradesConfirmText('')
+                    }}
+                  >
+                    Delete all grades for term
+                  </Button>
+                ) : null}
+                {selectedTermId ? (
                   <Button variant="ghost" size="icon" onClick={() => deleteTermMutation.mutate(selectedTermId)}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -940,72 +1729,35 @@ export function GradesPage() {
             </div>
           </CardHeader>
           <CardContent className="min-w-0">
-            {grades.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
-                No grades for this term yet.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Course</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Grade</TableHead>
-                      <TableHead>Weight</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Notes</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {grades.map((grade) => (
-                      <TableRow
-                        key={grade.id}
-                        className={cn(selectedCourseId === grade.courseId && 'bg-primary/5')}
-                        onClick={() => setSelectedCourseId(grade.courseId)}
-                      >
-                        <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            <span>{grade.course?.name ?? grade.courseId}</span>
-                            {riskByCourseId.get(grade.courseId)?.riskLevel && riskByCourseId.get(grade.courseId)?.riskLevel !== 'low' ? (
-                              <Badge
-                                variant={riskByCourseId.get(grade.courseId)?.riskLevel === 'high' ? 'default' : 'secondary'}
-                                className={riskByCourseId.get(grade.courseId)?.riskLevel === 'high' ? 'bg-destructive/15 text-destructive' : undefined}
-                              >
-                                Needs attention
-                              </Badge>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{grade.category?.name ?? '-'}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline">{formatGrade(grade.scale, grade.gradeValue)}</Badge>
-                            <span className="text-xs text-muted-foreground">{grade.performanceScore.toFixed(1)} score</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>{grade.weight.toFixed(2)}</TableCell>
-                        <TableCell>{new Date(grade.gradedOn).toLocaleDateString()}</TableCell>
-                        <TableCell className="max-w-[260px] truncate text-muted-foreground">{grade.note ?? '-'}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              deleteGradeMutation.mutate(grade.id)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
+            <SubjectGradeTable
+              grades={grades}
+              displayScale={summaryDisplayScale}
+              includeTermGrade={includeTermGradeInAverage}
+              riskByCourseId={riskByCourseId}
+              onSelectCourse={(courseId) => setSelectedCourseId(courseId)}
+              onOpenAddGradeForCourse={(courseId) => {
+                setSelectedCourseId(courseId)
+                setGradeForm((current) => ({
+                  ...current,
+                  courseId,
+                  categoryId: '',
+                  gradedOn: new Date().toISOString().slice(0, 10),
+                }))
+                setAddGradeOpen(true)
+              }}
+              onUpdateGrade={(gradeId, payload) => {
+                updateGradeMutation.mutate({
+                  id: gradeId,
+                  payload,
+                })
+              }}
+              onDeleteGrade={async (gradeId) => {
+                await deleteGradeMutation.mutateAsync(gradeId)
+              }}
+              onDeleteCourseGrades={(gradeIds) => deleteManyGradesMutation.mutate(gradeIds)}
+              pending={updateGradeMutation.isPending || deleteManyGradesMutation.isPending || deleteGradeMutation.isPending}
+              loading={gradesQuery.isPending}
+            />
           </CardContent>
         </Card>
 
@@ -1018,22 +1770,62 @@ export function GradesPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <p>Overall average score: <span className="font-semibold">{formatScore(summary?.overallAverage)}</span></p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Display scale</span>
+                  <select
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-xs"
+                    value={summaryDisplayScale}
+                    onChange={(event) => setSummaryDisplayScale(event.target.value as GradeScale)}
+                  >
+                    <option value="bulgarian">Bulgarian (2-6)</option>
+                    <option value="percentage">Normalized (0-100)</option>
+                    <option value="german">German (1-6)</option>
+                  </select>
+                </label>
+                <label className="flex items-end gap-2 rounded-md border border-border/70 bg-background/70 px-3 py-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={includeTermGradeInAverage}
+                    onChange={(event) => setIncludeTermGradeInAverage(event.target.checked)}
+                  />
+                  Include term grade as 1 item
+                </label>
+              </div>
               <p>
-                Previous term: <span className="font-semibold">{formatScore(summary?.previousTermAverage)}</span>
+                Overall average ({summaryDisplayScale === 'bulgarian' ? 'Bulgarian 2-6' : 'selected scale'}):{' '}
+                {summary?.overallAverage != null ? (
+                  <GradeChip scale={summaryDisplayScale} value={summary.overallAverage} />
+                ) : (
+                  <span className="font-semibold">-</span>
+                )}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Normalized score (0-100):{' '}
+                <span className="font-semibold text-foreground">{formatScore(summary?.overallAverageNormalized)}</span>
+              </p>
+              <p>
+                Previous term:{' '}
+                <span className="font-semibold">{formatAverageValue(summaryDisplayScale, summary?.previousTermAverage)}</span>
                 {summary?.deltaFromPrevious != null ? (
                   <span className={cn('ml-2 text-xs', summary.deltaFromPrevious >= 0 ? 'text-emerald-600' : 'text-destructive')}>
                     {summary.deltaFromPrevious >= 0 ? '+' : ''}
-                    {summary.deltaFromPrevious.toFixed(1)}
+                    {summaryDisplayScale === 'percentage' ? summary.deltaFromPrevious.toFixed(1) : summary.deltaFromPrevious.toFixed(2)}
                   </span>
                 ) : null}
               </p>
+              <p className="text-xs text-muted-foreground">{summary?.method ?? 'Averaging method unavailable.'}</p>
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Best courses</p>
                 <div className="mt-1 space-y-1">
                   {(summary?.bestCourses ?? []).map((course) => (
                     <p key={course.courseId} className="text-sm">
-                      {course.courseName} <span className="text-muted-foreground">({course.averageScore.toFixed(1)})</span>
+                      {course.courseName}{' '}
+                      <span className="text-muted-foreground">
+                        (
+                        <GradeChip className="mx-1 inline-flex align-middle" scale={summaryDisplayScale} value={course.averageValue} />
+                        | {formatScore(course.averageNormalizedScore)} score)
+                      </span>
                     </p>
                   ))}
                 </div>
@@ -1043,7 +1835,12 @@ export function GradesPage() {
                 <div className="mt-1 space-y-1">
                   {(summary?.worstCourses ?? []).map((course) => (
                     <p key={course.courseId} className="text-sm">
-                      {course.courseName} <span className="text-muted-foreground">({course.averageScore.toFixed(1)})</span>
+                      {course.courseName}{' '}
+                      <span className="text-muted-foreground">
+                        (
+                        <GradeChip className="mx-1 inline-flex align-middle" scale={summaryDisplayScale} value={course.averageValue} />
+                        | {formatScore(course.averageNormalizedScore)} score)
+                      </span>
                     </p>
                   ))}
                 </div>
@@ -1057,6 +1854,70 @@ export function GradesPage() {
               <CardDescription>Select a course from the table for category-weighted averages and what-if preview.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {selectedCourseForRename ? (
+                <div className="rounded-md border border-border/70 bg-background/70 p-2.5">
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Selected course</div>
+                  {editingCourseNameId === selectedCourseForRename.id ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={editingCourseNameValue}
+                        onChange={(event) => setEditingCourseNameValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            const nextName = editingCourseNameValue.trim()
+                            if (nextName) {
+                              updateCourseMutation.mutate({ id: selectedCourseForRename.id, name: nextName })
+                            }
+                          }
+                          if (event.key === 'Escape') {
+                            setEditingCourseNameId(null)
+                            setEditingCourseNameValue('')
+                          }
+                        }}
+                      />
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        title="Save name"
+                        onClick={() => {
+                          const nextName = editingCourseNameValue.trim()
+                          if (!nextName) return
+                          updateCourseMutation.mutate({ id: selectedCourseForRename.id, name: nextName })
+                        }}
+                        disabled={!editingCourseNameValue.trim() || updateCourseMutation.isPending}
+                      >
+                        <Check className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Cancel rename"
+                        onClick={() => {
+                          setEditingCourseNameId(null)
+                          setEditingCourseNameValue('')
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{selectedCourseForRename.name}</p>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title="Edit name"
+                        onClick={() => {
+                          setEditingCourseNameId(selectedCourseForRename.id)
+                          setEditingCourseNameValue(selectedCourseForRename.name)
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
               <label className="space-y-1">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Course</span>
                 <select
@@ -1073,7 +1934,12 @@ export function GradesPage() {
                 </select>
               </label>
               <p className="text-sm">
-                Average score: <span className="font-semibold">{formatScore(selectedCourseOverallByCategory)}</span>
+                Course average:{' '}
+                {selectedCourseOverallByCategory == null ? (
+                  <span className="font-semibold">-</span>
+                ) : (
+                  <GradeChip scale="percentage" value={selectedCourseOverallByCategory} />
+                )}
               </p>
               <p className="text-sm">
                 Trend (last 5):{' '}
@@ -1176,7 +2042,7 @@ export function GradesPage() {
                 {selectedCourseGrades.slice(0, 5).map((grade: GradeItemDto) => (
                   <div key={grade.id} className="rounded-md border border-border/70 bg-background/70 p-2 text-xs">
                     <p className="font-medium">
-                      {formatGrade(grade.scale, grade.gradeValue)}
+                      <GradeChip className="inline-flex align-middle" scale={grade.scale} value={grade.gradeValue} />
                       {grade.category?.name ? <span className="ml-1 text-muted-foreground">({grade.category.name})</span> : null}
                     </p>
                     <p className="text-muted-foreground">
@@ -1237,52 +2103,55 @@ export function GradesPage() {
             </CardContent>
           </Card>
 
-          <Card className="shadow-soft">
-            <CardHeader>
-              <CardTitle className="text-base">Needs Attention</CardTitle>
-              <CardDescription>Recommendations from grades + recent study time.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {recommendations.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No recommendations yet.</p>
-              ) : (
-                recommendations.slice(0, 5).map((item) => (
+          {needsAttentionItems.length > 0 ? (
+            <Card className="shadow-soft">
+              <CardHeader>
+                <CardTitle className="text-base">Needs Attention</CardTitle>
+                <CardDescription>{needsAttentionCaption}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {needsAttentionItems.slice(0, 5).map((item) => (
                   <div key={item.courseId} className="rounded-md border border-border/70 bg-background/70 p-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm font-medium">{item.courseName}</p>
                       <div className="flex items-center gap-1.5">
-                        {riskByCourseId.get(item.courseId)?.riskLevel && riskByCourseId.get(item.courseId)?.riskLevel !== 'low' ? (
-                          <Badge
-                            variant={riskByCourseId.get(item.courseId)?.riskLevel === 'high' ? 'default' : 'secondary'}
-                            className={riskByCourseId.get(item.courseId)?.riskLevel === 'high' ? 'bg-destructive/15 text-destructive' : undefined}
-                          >
-                            Needs attention
-                          </Badge>
-                        ) : null}
-                        <Badge variant="outline">Attention {item.attentionScore}</Badge>
+                        <Badge
+                          variant={item.riskLevel === 'high' ? 'default' : 'secondary'}
+                          className={item.riskLevel === 'high' ? 'bg-destructive/15 text-destructive' : undefined}
+                        >
+                          Needs attention
+                        </Badge>
+                        <Badge variant="outline">Risk {item.riskScore}</Badge>
                       </div>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Recommend {item.recommendedMinutes} min over next 7 days.
+                      Avg {formatAverageValue(summaryDisplayScale, item.currentAverage)} ({formatScore(item.currentAverageNormalized)} normalized)
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {item.recommendedMinutes > 0
+                        ? `Recommend ${item.recommendedMinutes} min over next 7 days.`
+                        : 'No extra study needed right now.'}
                     </p>
                     <div className="mt-1 space-y-0.5">
                       {item.reasons.slice(0, 2).map((reason) => (
                         <p key={reason} className="text-xs text-muted-foreground">• {reason}</p>
                       ))}
                     </div>
-                    <Button
-                      size="sm"
-                      className="mt-2"
-                      onClick={() =>
-                        addRecommendationToPlannerMutation.mutate({
-                          courseId: item.courseId,
-                          minutes: item.recommendedMinutes,
-                        })
-                      }
-                      disabled={addRecommendationToPlannerMutation.isPending}
-                    >
-                      ➕ Add {item.recommendedMinutes} min to plan
-                    </Button>
+                    {item.recommendedMinutes > 0 ? (
+                      <Button
+                        size="sm"
+                        className="mt-2"
+                        onClick={() =>
+                          addRecommendationToPlannerMutation.mutate({
+                            courseId: item.courseId,
+                            minutes: item.recommendedMinutes,
+                          })
+                        }
+                        disabled={addRecommendationToPlannerMutation.isPending}
+                      >
+                        ➕ Add {item.recommendedMinutes} min to plan
+                      </Button>
+                    ) : null}
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <Button
                         size="sm"
@@ -1313,10 +2182,10 @@ export function GradesPage() {
                       </Button>
                     </div>
                   </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
       </section>
 
@@ -1364,6 +2233,57 @@ export function GradesPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteTermGradesConfirmOpen}
+        onOpenChange={(open) => {
+          setDeleteTermGradesConfirmOpen(open)
+          if (!open) setDeleteTermGradesConfirmText('')
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all grades for this term</DialogTitle>
+            <DialogDescription>
+              This permanently deletes all grade items in the selected term. Courses are not deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Type <span className="font-semibold text-foreground">DELETE</span> to confirm.
+            </p>
+            <Input
+              value={deleteTermGradesConfirmText}
+              onChange={(event) => setDeleteTermGradesConfirmText(event.target.value)}
+              placeholder="DELETE"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDeleteTermGradesConfirmOpen(false)
+                setDeleteTermGradesConfirmText('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-destructive/50 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => {
+                if (!selectedTermId) return
+                deleteTermGradesMutation.mutate(selectedTermId)
+              }}
+              disabled={deleteTermGradesConfirmText !== 'DELETE' || !selectedTermId || deleteTermGradesMutation.isPending}
+            >
+              Delete all grades
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1617,8 +2537,14 @@ export function GradesPage() {
                       setShkoloMeta(null)
                       setShkoloPreviewRows([])
                       setShkoloRemovedRowsCount(0)
-                      setShkoloCreateCourseRowKey(null)
-                      setShkoloCreateCourseName('')
+                      closeShkoloCreateCourseDialog()
+                      setShkoloEditingSubjectRowKey(null)
+                      setShkoloEditingSubjectValue('')
+                      setShkoloMoveGradeDialog(null)
+                      setShkoloMoveGradeTargetRowKey('')
+                      setShkoloSaveConfirmOpen(false)
+                      setShkoloRemoveRowKey(null)
+                      setShkoloAlwaysIgnoreSubject(false)
                       setShkoloForm((current) => ({
                         ...current,
                         file: event.target.files?.[0] ?? null,
@@ -1676,12 +2602,30 @@ export function GradesPage() {
                       {' · '}
                       Term grades: <span className="font-medium text-foreground">{shkoloMeta.termGradesFoundCount}</span>
                     </p>
+                    {shkoloMeta.parseWarnings.length > 0 ? (
+                      <p>
+                        Parse warnings: <span className="font-medium text-foreground">{shkoloMeta.parseWarnings.length}</span>
+                      </p>
+                    ) : null}
                     {shkoloMeta.detectedYear ? (
                       <p>
                         Detected year: <span className="font-medium text-foreground">{shkoloMeta.detectedYear}</span>
                       </p>
                     ) : null}
                   </div>
+                ) : null}
+
+                {shkoloMeta && shkoloMeta.parseWarnings.length > 0 ? (
+                  <details className="rounded-md border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-900 dark:text-amber-200">
+                    <summary className="cursor-pointer font-medium">
+                      Parse warnings ({shkoloMeta.parseWarnings.length})
+                    </summary>
+                    <ul className="mt-2 list-disc space-y-1 pl-4">
+                      {shkoloMeta.parseWarnings.map((warning, index) => (
+                        <li key={`shkolo-warning-${index}`}>{warning}</li>
+                      ))}
+                    </ul>
+                  </details>
                 ) : null}
 
                 {shkoloMeta && shkoloMeta.parsedRows === 0 ? (
@@ -1693,11 +2637,16 @@ export function GradesPage() {
                 {showShkoloDebug ? (
                   shkoloMeta?.debug ? (
                     <div className="space-y-2 rounded-md border border-border/70 bg-background/70 p-3 text-xs text-muted-foreground">
-                      <p>
-                        Extracted text total: <span className="font-medium text-foreground">{shkoloMeta.debug.totalExtractedLength}</span>
-                        {' · '}
-                        OCR fallback: <span className="font-medium text-foreground">{shkoloMeta.debug.usedOcrFallback ? 'yes' : 'no'}</span>
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p>
+                          Extracted text total: <span className="font-medium text-foreground">{shkoloMeta.debug.totalExtractedLength}</span>
+                          {' · '}
+                          OCR fallback: <span className="font-medium text-foreground">{shkoloMeta.debug.usedOcrFallback ? 'yes' : 'no'}</span>
+                        </p>
+                        <Button type="button" variant="outline" size="sm" onClick={downloadShkoloDebugJson}>
+                          Download debug JSON
+                        </Button>
+                      </div>
                       {shkoloMeta.debug.extractedPageTextLengths.map((pageInfo, index) => (
                         <div key={`debug-page-${pageInfo.page}-${index}`} className="rounded border border-border/60 p-2">
                           <p>
@@ -1708,6 +2657,42 @@ export function GradesPage() {
                               {shkoloMeta.debug?.rawSamples[index]?.slice(0, 500)}
                             </pre>
                           ) : null}
+                          {(() => {
+                            const pageItems = shkoloMeta.debug?.pageItems?.[String(pageInfo.page)] ?? []
+                            const previewItems = pageItems.slice(0, 200)
+                            if (!previewItems.length) return null
+                            return (
+                              <div className="mt-2">
+                                <p className="mb-1 text-[11px] font-medium text-foreground">
+                                  Positional items ({previewItems.length} / {pageItems.length})
+                                </p>
+                                <div className="max-h-48 overflow-auto rounded border border-border/50">
+                                  <Table>
+                                    <TableHeader>
+                                      <TableRow>
+                                        <TableHead>str</TableHead>
+                                        <TableHead>x</TableHead>
+                                        <TableHead>y</TableHead>
+                                        <TableHead>width</TableHead>
+                                        <TableHead>height</TableHead>
+                                      </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                      {previewItems.map((item, itemIndex) => (
+                                        <TableRow key={`page-${pageInfo.page}-item-${itemIndex}`}>
+                                          <TableCell className="max-w-[240px] truncate">{item.str}</TableCell>
+                                          <TableCell>{item.x.toFixed(2)}</TableCell>
+                                          <TableCell>{item.y.toFixed(2)}</TableCell>
+                                          <TableCell>{item.width.toFixed(2)}</TableCell>
+                                          <TableCell>{item.height.toFixed(2)}</TableCell>
+                                        </TableRow>
+                                      ))}
+                                    </TableBody>
+                                  </Table>
+                                </div>
+                              </div>
+                            )
+                          })()}
                         </div>
                       ))}
                     </div>
@@ -1723,43 +2708,72 @@ export function GradesPage() {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Extracted subject</TableHead>
+                          <TableHead>Subject</TableHead>
                           <TableHead>Matched course</TableHead>
+                          <TableHead>T1 current</TableHead>
                           <TableHead>T1 final</TableHead>
+                          <TableHead>T2 current</TableHead>
                           <TableHead>T2 final</TableHead>
                           <TableHead>Year final</TableHead>
-                          <TableHead>T1 current</TableHead>
-                          <TableHead>T2 current</TableHead>
                           <TableHead>Match</TableHead>
+                          <TableHead>Warnings</TableHead>
                           <TableHead>Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {shkoloPreviewRows.map((row) => (
-                          <TableRow key={row.key}>
+                          <TableRow
+                            key={row.key}
+                            className={row.matchScore < SHKOLO_UNMATCHED_THRESHOLD ? 'border-l-2 border-l-amber-500/70 bg-amber-500/5' : undefined}
+                          >
                             <TableCell>
                               <div className="space-y-1">
-                                <Input
-                                  value={row.subjectName}
-                                  onChange={(event) =>
-                                    setShkoloPreviewRows((current) =>
-                                      current.map((item) =>
-                                        item.key === row.key
-                                          ? { ...item, subjectName: event.target.value }
-                                          : item,
-                                      ),
-                                    )
-                                  }
-                                  onBlur={(event) => rematchShkoloRow(row.key, event.target.value)}
-                                />
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => rematchShkoloRow(row.key, row.subjectName)}
-                                >
+                                {shkoloEditingSubjectRowKey === row.key ? (
+                                  <div className="flex items-center gap-1">
+                                    <Input
+                                      value={shkoloEditingSubjectValue}
+                                      onChange={(event) => setShkoloEditingSubjectValue(event.target.value)}
+                                    />
+                                    <Button type="button" variant="outline" size="sm" onClick={() => saveShkoloSubjectNameEdit(row.key)}>
+                                      <Check className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setShkoloEditingSubjectRowKey(null)
+                                        setShkoloEditingSubjectValue('')
+                                      }}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-sm font-medium">{row.subjectName}</p>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setShkoloEditingSubjectRowKey(row.key)
+                                        setShkoloEditingSubjectValue(row.subjectName)
+                                      }}
+                                    >
+                                      <Pencil className="h-3.5 w-3.5" />
+                                      Edit name
+                                    </Button>
+                                  </div>
+                                )}
+                                <Button type="button" variant="outline" size="sm" onClick={() => rematchShkoloRow(row.key, row.subjectName)}>
                                   Re-match
                                 </Button>
+                                {row.matchScore < SHKOLO_UNMATCHED_THRESHOLD ? (
+                                  <Badge variant="outline" className="border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                                    Needs review
+                                  </Badge>
+                                ) : null}
                               </div>
                             </TableCell>
                             <TableCell>
@@ -1775,7 +2789,7 @@ export function GradesPage() {
                                         setShkoloPreviewRows((current) =>
                                           current.map((item) =>
                                             item.key === row.key
-                                              ? { ...item, courseId: '', matchedCourseName: '' }
+                                              ? { ...item, courseId: '', matchedCourseName: '', matchDebug: item.matchDebug }
                                               : item,
                                           ),
                                         )
@@ -1785,19 +2799,34 @@ export function GradesPage() {
                                       setShkoloPreviewRows((current) =>
                                         current.map((item) =>
                                           item.key === row.key
-                                            ? { ...item, courseId: value, matchedCourseName: selected?.name ?? '' }
+                                            ? {
+                                                ...item,
+                                                courseId: value,
+                                                matchedCourseName: selected?.name ?? '',
+                                                matchScore: 1,
+                                                matchDebug: {
+                                                  normalizedExtracted: row.subjectName.normalize('NFKD').toLowerCase(),
+                                                  normalizedCandidate: (selected?.name ?? '').normalize('NFKD').toLowerCase(),
+                                                  levenshteinDistance: 0,
+                                                  tokenScore: 1,
+                                                  charScore: 1,
+                                                  overlapBonus: 0,
+                                                  threshold: SHKOLO_UNMATCHED_THRESHOLD,
+                                                  formula: 'manually selected course assigned',
+                                                },
+                                              }
                                             : item,
                                         ),
                                       )
                                     }}
                                   >
+                                    <option value="__create_new__">+ Create new course…</option>
                                     <option value="">Match course...</option>
                                     {courses.map((course) => (
                                       <option key={course.id} value={course.id}>
                                         {course.name}
                                       </option>
                                     ))}
-                                    <option value="__create_new__">Create new...</option>
                                   </select>
                                 ) : (
                                   <div className="rounded-md border border-border/70 bg-background/70 p-2 text-xs text-muted-foreground">
@@ -1813,67 +2842,60 @@ export function GradesPage() {
                                     </Button>
                                   </div>
                                 )}
-                                {courses.length > 0 && (!row.courseId || shkoloCreateCourseRowKey === row.key) ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => openShkoloCreateCourseDialog(row.key, row.subjectName)}
-                                    >
-                                      + Create course
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() =>
-                                        createShkoloCourseMutation.mutate({
-                                          rowKey: row.key,
-                                          name: row.subjectName,
-                                        })
-                                      }
-                                      disabled={createShkoloCourseMutation.isPending}
-                                    >
-                                      Create &amp; assign
-                                    </Button>
-                                  </div>
+                                {!row.courseId ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openShkoloCreateCourseDialog(row.key, row.subjectName)}
+                                  >
+                                    + Create course
+                                  </Button>
                                 ) : null}
-                                {shkoloCreateCourseRowKey === row.key ? (
-                                  <div className="space-y-1 rounded-md border border-border/70 p-2">
-                                    <Input
-                                      value={shkoloCreateCourseName}
-                                      onChange={(event) => setShkoloCreateCourseName(event.target.value)}
-                                      placeholder="Course name"
-                                    />
-                                    <div className="flex gap-1">
-                                      <Button
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-1">
+                                  {parseGradeListText(row.term1Current).map((value, chipIndex) => (
+                                    <div key={`${row.key}-t1-current-${chipIndex}`} className="inline-flex items-center gap-1">
+                                      <button
                                         type="button"
-                                        size="sm"
+                                        onClick={() => startShkoloMoveGrade(row.key, 'term1Current', chipIndex, value)}
+                                        className="rounded"
+                                        title="Move to subject"
+                                      >
+                                        <GradeChip
+                                          scale={shkoloForm.scale}
+                                          value={value}
+                                          className="text-[11px] cursor-pointer"
+                                          title="Click to move to another subject"
+                                        />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                                        title="Remove this grade"
                                         onClick={() =>
-                                          createShkoloCourseMutation.mutate({
-                                            rowKey: row.key,
-                                            name: shkoloCreateCourseName,
-                                          })
+                                          updateShkoloCurrentGrades(row.key, 'term1Current', (values) =>
+                                            values.filter((_, index) => index !== chipIndex),
+                                          )
                                         }
-                                        disabled={!shkoloCreateCourseName.trim() || createShkoloCourseMutation.isPending}
                                       >
-                                        Add
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => {
-                                          setShkoloCreateCourseRowKey(null)
-                                          setShkoloCreateCourseName('')
-                                        }}
-                                      >
-                                        Cancel
-                                      </Button>
+                                        <X className="h-3 w-3" />
+                                      </button>
                                     </div>
-                                  </div>
-                                ) : null}
+                                  ))}
+                                </div>
+                                <Input
+                                  value={row.term1Current}
+                                  onChange={(event) =>
+                                    setShkoloPreviewRows((current) =>
+                                      current.map((item) => (item.key === row.key ? { ...item, term1Current: event.target.value } : item)),
+                                    )
+                                  }
+                                  placeholder="e.g. 6, 5, 5.50"
+                                />
                               </div>
                             </TableCell>
                             <TableCell>
@@ -1887,6 +2909,50 @@ export function GradesPage() {
                                   )
                                 }
                               />
+                            </TableCell>
+                            <TableCell>
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-1">
+                                  {parseGradeListText(row.term2Current).map((value, chipIndex) => (
+                                    <div key={`${row.key}-t2-current-${chipIndex}`} className="inline-flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => startShkoloMoveGrade(row.key, 'term2Current', chipIndex, value)}
+                                        className="rounded"
+                                        title="Move to subject"
+                                      >
+                                        <GradeChip
+                                          scale={shkoloForm.scale}
+                                          value={value}
+                                          className="text-[11px] cursor-pointer"
+                                          title="Click to move to another subject"
+                                        />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 text-muted-foreground hover:text-foreground"
+                                        title="Remove this grade"
+                                        onClick={() =>
+                                          updateShkoloCurrentGrades(row.key, 'term2Current', (values) =>
+                                            values.filter((_, index) => index !== chipIndex),
+                                          )
+                                        }
+                                      >
+                                        <X className="h-3 w-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                                <Input
+                                  value={row.term2Current}
+                                  onChange={(event) =>
+                                    setShkoloPreviewRows((current) =>
+                                      current.map((item) => (item.key === row.key ? { ...item, term2Current: event.target.value } : item)),
+                                    )
+                                  }
+                                  placeholder="e.g. 6, 5, 5.50"
+                                />
+                              </div>
                             </TableCell>
                             <TableCell>
                               <Input
@@ -1912,27 +2978,37 @@ export function GradesPage() {
                                 }
                               />
                             </TableCell>
-                            <TableCell>
-                              <Input
-                                value={row.term1Current}
-                                onChange={(event) =>
-                                  setShkoloPreviewRows((current) =>
-                                    current.map((item) => (item.key === row.key ? { ...item, term1Current: event.target.value } : item)),
-                                  )
-                                }
-                              />
+                            <TableCell className="space-y-1 text-xs text-muted-foreground">
+                              <p title={buildMatchTooltip(row.matchDebug)}>{Math.round(row.matchScore * 100)}%</p>
+                              {row.matchScore < SHKOLO_UNMATCHED_THRESHOLD ? (
+                                <Badge variant="outline" className="border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                                  Needs review
+                                </Badge>
+                              ) : null}
                             </TableCell>
                             <TableCell>
-                              <Input
-                                value={row.term2Current}
-                                onChange={(event) =>
-                                  setShkoloPreviewRows((current) =>
-                                    current.map((item) => (item.key === row.key ? { ...item, term2Current: event.target.value } : item)),
-                                  )
-                                }
-                              />
+                              {row.parseWarnings.length > 0 || row.rawRowText ? (
+                                <details className="max-w-[260px] text-xs">
+                                  <summary className="cursor-pointer text-amber-600 dark:text-amber-300">
+                                    {row.parseWarnings.length > 0 ? `${row.parseWarnings.length} warning(s)` : 'Show raw row'}
+                                  </summary>
+                                  {row.parseWarnings.length > 0 ? (
+                                    <ul className="mt-1 list-disc space-y-1 pl-4">
+                                      {row.parseWarnings.map((warning, warningIndex) => (
+                                        <li key={`${row.key}-warning-${warningIndex}`}>{warning}</li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                  {row.rawRowText ? (
+                                    <pre className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 p-2 text-[11px] text-muted-foreground">
+                                      {row.rawRowText}
+                                    </pre>
+                                  ) : null}
+                                </details>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">-</span>
+                              )}
                             </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{Math.round(row.matchScore * 100)}%</TableCell>
                             <TableCell>
                               <Button
                                 type="button"
@@ -1941,7 +3017,7 @@ export function GradesPage() {
                                 onClick={() => removeShkoloRow(row.key)}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
-                                Remove
+                                Delete subject
                               </Button>
                             </TableCell>
                           </TableRow>
@@ -1976,7 +3052,13 @@ export function GradesPage() {
               </Button>
             ) : (
               <Button
-                onClick={() => shkoloImportSaveMutation.mutate()}
+                onClick={() => {
+                  if (hasShkoloLowConfidenceRows) {
+                    setShkoloSaveConfirmOpen(true)
+                    return
+                  }
+                  shkoloImportSaveMutation.mutate()
+                }}
                 disabled={
                   !shkoloMeta ||
                   shkoloMeta.parsedRows === 0 ||
@@ -1988,6 +3070,199 @@ export function GradesPage() {
                 Save parsed grades
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(shkoloCreateCourseCandidate)}
+        onOpenChange={(open) => {
+          if (!open) closeShkoloCreateCourseDialog()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create course</DialogTitle>
+            <DialogDescription>
+              Create a new course and assign it to this imported subject.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Course name</label>
+              <Input
+                value={shkoloCreateCourseName}
+                onChange={(event) => setShkoloCreateCourseName(event.target.value)}
+                placeholder="Course name"
+              />
+            </div>
+            {shkoloCreateCourseCandidate ? (
+              <p className="text-xs text-muted-foreground">
+                Extracted subject: <span className="font-medium text-foreground">{shkoloCreateCourseCandidate.subjectName}</span>
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => closeShkoloCreateCourseDialog()}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!shkoloCreateCourseCandidate) return
+                createShkoloCourseMutation.mutate({
+                  rowKey: shkoloCreateCourseCandidate.key,
+                  name: shkoloCreateCourseName,
+                })
+              }}
+              disabled={!shkoloCreateCourseName.trim() || createShkoloCourseMutation.isPending || !shkoloCreateCourseCandidate}
+            >
+              Create &amp; assign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={shkoloSaveConfirmOpen} onOpenChange={setShkoloSaveConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm unmatched subjects</DialogTitle>
+            <DialogDescription>
+              {shkoloLowConfidenceRows.length} subject match{shkoloLowConfidenceRows.length === 1 ? '' : 'es'} look weak (below {Math.round(SHKOLO_UNMATCHED_THRESHOLD * 100)}%).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border border-border/70 p-2 text-sm">
+            {shkoloLowConfidenceRows.map((row) => (
+              <div key={`unmatched-${row.key}`} className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate">{row.subjectName}</p>
+                <Badge variant="outline" className="shrink-0 border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                  {Math.round(row.matchScore * 100)}%
+                </Badge>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setShkoloSaveConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setShkoloSaveConfirmOpen(false)
+                shkoloImportSaveMutation.mutate()
+              }}
+              disabled={shkoloImportSaveMutation.isPending}
+            >
+              Confirm and save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(shkoloMoveGradeDialog)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShkoloMoveGradeDialog(null)
+            setShkoloMoveGradeTargetRowKey('')
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move grade to subject</DialogTitle>
+            <DialogDescription>
+              Choose where to move this grade chip in the current preview.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Grade: <span className="font-medium text-foreground">{shkoloMoveGradeDialog?.gradeValue ?? '-'}</span>
+            </p>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              value={shkoloMoveGradeTargetRowKey}
+              onChange={(event) => setShkoloMoveGradeTargetRowKey(event.target.value)}
+            >
+              <option value="">Select target subject...</option>
+              {shkoloPreviewRows
+                .filter((row) => row.key !== shkoloMoveGradeDialog?.fromRowKey)
+                .map((row) => (
+                  <option key={`move-target-${row.key}`} value={row.key}>
+                    {row.subjectName}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShkoloMoveGradeDialog(null)
+                setShkoloMoveGradeTargetRowKey('')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmShkoloMoveGrade}
+              disabled={!shkoloMoveGradeTargetRowKey}
+            >
+              Move grade
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(shkoloRemoveCandidate)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShkoloRemoveRowKey(null)
+            setShkoloAlwaysIgnoreSubject(false)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove subject from import</DialogTitle>
+            <DialogDescription>
+              Remove this subject from import?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-border/70 bg-background/70 p-3 text-sm">
+              {shkoloRemoveCandidate?.subjectName ?? 'Selected subject'}
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={shkoloAlwaysIgnoreSubject}
+                onChange={(event) => setShkoloAlwaysIgnoreSubject(event.target.checked)}
+              />
+              Always ignore this subject in future imports
+            </label>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setShkoloRemoveRowKey(null)
+                setShkoloAlwaysIgnoreSubject(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => confirmRemoveShkoloRow()}
+              disabled={saveIgnoredShkoloSubjectsMutation.isPending}
+            >
+              Remove
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
