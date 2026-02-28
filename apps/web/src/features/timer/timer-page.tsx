@@ -1,13 +1,13 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock3, Coffee, Flame, Info, Pause, Play, RotateCcw, Save, Timer } from 'lucide-react'
-import Tesseract from 'tesseract.js'
+import { Clock3, Coffee, Flame, Info, Maximize2, Minimize2, Pause, Play, RotateCcw, Save, Timer } from 'lucide-react'
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
 import type { CreateSessionDto } from '@/api/dtos'
 import { getMe } from '@/api/me'
+import { updateOrganizationTask } from '@/api/organization'
 import { createSession } from '@/api/sessions'
 import { getStreakOverview } from '@/api/streak'
 import { getTimerRecommendation } from '@/api/timer'
@@ -23,10 +23,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
+import { useFullscreen } from '@/hooks/use-fullscreen'
+import { useTimerSession } from '@/hooks/use-timer-session'
 import { cn } from '@/lib/utils'
 
 type PomodoroMode = 'focus' | 'short' | 'long'
 type TimerKind = 'focus' | 'manual'
+type SessionOutcome = 'completed' | 'continue' | 'break'
 
 const modeTheme = {
   focus: {
@@ -87,11 +90,17 @@ function CircularTimer({
   running,
   progress,
   time,
+  label,
+  clockClassName,
+  containerClassName,
 }: {
   mode: PomodoroMode
   running: boolean
   progress: number
   time: string
+  label?: string
+  clockClassName?: string
+  containerClassName?: string
 }) {
   const size = 316
   const stroke = 16
@@ -101,7 +110,7 @@ function CircularTimer({
   const dashOffset = circumference * (1 - clampedProgress)
 
   return (
-    <div className="relative mx-auto w-full max-w-[360px]">
+    <div className={cn('relative mx-auto w-full max-w-[360px]', containerClassName)}>
       <motion.div
         animate={{ opacity: running ? 1 : 0.8, scale: running ? 1 : 0.985 }}
         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
@@ -152,8 +161,8 @@ function CircularTimer({
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.2 }}
           >
-            <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">{modeTheme[mode].label}</p>
-            <p className="mt-1 text-5xl font-semibold tracking-tight md:text-6xl lg:text-7xl">{time}</p>
+            <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">{label ?? modeTheme[mode].label}</p>
+            <p className={cn('mt-1 text-5xl font-semibold tracking-tight md:text-6xl lg:text-7xl', clockClassName)}>{time}</p>
           </motion.div>
         </AnimatePresence>
       </div>
@@ -168,6 +177,16 @@ type LogSessionModalProps = {
   description: string
   startTime: string
   endTime: string
+  activeTask: {
+    id: string
+    name: string
+    description: string | null
+    courseId: string | null
+    activityId: string | null
+    courseName: string | null
+  } | null
+  requireOutcomeSelection: boolean
+  onSessionSaved?: (outcome: SessionOutcome | null) => void
 }
 
 function LogSessionModal({
@@ -177,6 +196,9 @@ function LogSessionModal({
   description,
   startTime,
   endTime,
+  activeTask,
+  requireOutcomeSelection,
+  onSessionSaved,
 }: LogSessionModalProps) {
   const queryClient = useQueryClient()
   const coursesQuery = useQuery({
@@ -195,18 +217,32 @@ function LogSessionModal({
   const [activityId, setActivityId] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [outcome, setOutcome] = useState<SessionOutcome | null>(null)
 
   useEffect(() => {
     if (open && courses.length > 0) {
-      setCourseId((current) => current || courses[0].id)
+      const preferredCourseId = activeTask?.courseId
+      const hasPreferredCourse = preferredCourseId ? courses.some((course) => course.id === preferredCourseId) : false
+      setCourseId((current) => {
+        if (current) return current
+        if (hasPreferredCourse && preferredCourseId) return preferredCourseId
+        return courses[0].id
+      })
     }
-  }, [courses, open])
+  }, [activeTask?.courseId, courses, open])
+
+  useEffect(() => {
+    if (!open) return
+    if (!activeTask?.activityId) return
+    setActivityId((current) => current || activeTask.activityId || '')
+  }, [activeTask?.activityId, open])
 
   useEffect(() => {
     if (!open) {
       setActivityId('')
       setNote('')
       setError(null)
+      setOutcome(null)
     }
   }, [open])
 
@@ -226,6 +262,9 @@ function LogSessionModal({
       queryClient.invalidateQueries({ queryKey: ['timer-recommendation'] })
       queryClient.invalidateQueries({ queryKey: ['planner-blocks'] })
       queryClient.invalidateQueries({ queryKey: ['planner-overview'] })
+      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
+      onSessionSaved?.(outcome)
       onOpenChange(false)
     },
     onError: () => {
@@ -233,19 +272,24 @@ function LogSessionModal({
     },
   })
 
-  const canSave = courseId.length > 0
+  const canSave = courseId.length > 0 && (!requireOutcomeSelection || Boolean(outcome))
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
-    if (!canSave) {
+    if (!courseId) {
       setError('Select a course first.')
+      return
+    }
+    if (requireOutcomeSelection && !outcome) {
+      setError('Choose an outcome first.')
       return
     }
 
     mutation.mutate({
       courseId,
       activityId: activityId || undefined,
+      taskId: activeTask?.id,
       startTime,
       endTime,
       breakMinutes: 0,
@@ -262,6 +306,44 @@ function LogSessionModal({
         </DialogHeader>
 
         <form onSubmit={onSubmit} className="mt-4 space-y-4">
+          {requireOutcomeSelection ? (
+            <div className="space-y-2 rounded-lg border border-border/70 bg-background/70 p-3">
+              <p className="text-sm font-medium">Did you finish the task?</p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={outcome === 'completed' ? 'default' : 'outline'}
+                  onClick={() => {
+                    setOutcome('completed')
+                    setError(null)
+                  }}
+                >
+                  Task completed
+                </Button>
+                <Button
+                  type="button"
+                  variant={outcome === 'continue' ? 'default' : 'outline'}
+                  onClick={() => {
+                    setOutcome('continue')
+                    setError(null)
+                  }}
+                >
+                  Continue working
+                </Button>
+                <Button
+                  type="button"
+                  variant={outcome === 'break' ? 'default' : 'outline'}
+                  onClick={() => {
+                    setOutcome('break')
+                    setError(null)
+                  }}
+                >
+                  Take break
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="space-y-1.5">
               <span className="text-sm font-medium">Course</span>
@@ -318,6 +400,14 @@ function LogSessionModal({
             placeholder="What did you work on? Supports Markdown."
           />
 
+          {activeTask ? (
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs">
+              <p className="font-semibold">Linked task: {activeTask.name}</p>
+              {activeTask.courseName ? <p className="text-muted-foreground">Course: {activeTask.courseName}</p> : null}
+              {activeTask.description ? <p className="mt-1 text-muted-foreground">{activeTask.description}</p> : null}
+            </div>
+          ) : null}
+
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
           <DialogFooter>
@@ -336,6 +426,8 @@ function LogSessionModal({
 }
 
 export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number }) {
+  const fullscreen = useFullscreen()
+  const timerSession = useTimerSession()
   const meQuery = useQuery({
     queryKey: ['me'],
     queryFn: ({ signal }) => getMe(signal),
@@ -385,14 +477,29 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
   const [manualElapsedSeconds, setManualElapsedSeconds] = useState(0)
   const [manualStartedAt, setManualStartedAt] = useState<string | null>(null)
   const [focusSessionsCompleted, setFocusSessionsCompleted] = useState(0)
-  const [ocrLoading, setOcrLoading] = useState(false)
-  const [ocrError, setOcrError] = useState<string | null>(null)
-  const [ocrText, setOcrText] = useState('')
-  const [ocrFileName, setOcrFileName] = useState('')
+  const [fullscreenTimerKind, setFullscreenTimerKind] = useState<TimerKind>('focus')
+  const [showTaskCelebration, setShowTaskCelebration] = useState(false)
 
   const [logModal, setLogModal] = useState<{ kind: TimerKind; startTime: string; endTime: string } | null>(null)
 
+  const activeTask = timerSession.activeTaskId
+    ? {
+        id: timerSession.activeTaskId,
+        name: timerSession.activeTaskName ?? 'Untitled task',
+        description: timerSession.activeTaskDescription,
+        courseId: timerSession.activeTaskCourseId,
+        activityId: timerSession.activeTaskActivityId,
+        courseName: timerSession.activeTaskCourseName,
+      }
+    : null
+
   const modeSeconds = modeDurations[mode] * 60
+
+  useEffect(() => {
+    if (!showTaskCelebration) return
+    const timeout = window.setTimeout(() => setShowTaskCelebration(false), 1800)
+    return () => window.clearTimeout(timeout)
+  }, [showTaskCelebration])
 
   useEffect(() => {
     setPomodoroRunning(false)
@@ -444,12 +551,20 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
   }, [manualRunning])
 
   const startPomodoro = () => {
+    timerSession.setSessionType('pomodoro')
+    if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
+      timerSession.setSessionStartTime(new Date().toISOString())
+    }
     setPomodoroRunning(true)
   }
 
   useEffect(() => {
     if (startFocusSignal <= 0) return
     setMode('focus')
+    timerSession.setSessionType('pomodoro')
+    if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
+      timerSession.setSessionStartTime(new Date().toISOString())
+    }
     setPomodoroRunning(true)
   }, [startFocusSignal])
 
@@ -464,6 +579,10 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
   }
 
   const startManual = () => {
+    timerSession.setSessionType('manual')
+    if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
+      timerSession.setSessionStartTime(new Date().toISOString())
+    }
     if (!manualStartedAt) {
       setManualStartedAt(new Date().toISOString())
     }
@@ -486,23 +605,47 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     setLogModal({ kind: 'manual', startTime: start.toISOString(), endTime: end.toISOString() })
   }
 
-  const extractTextFromImage = async (file: File) => {
-    setOcrLoading(true)
-    setOcrError(null)
-    setOcrText('')
-    setOcrFileName(file.name)
+  const enterFocusFullscreen = () => {
+    setFullscreenTimerKind('focus')
+    void fullscreen.enter()
+  }
 
-    try {
-      const {
-        data: { text },
-      } = await Tesseract.recognize(file, 'eng')
-      setOcrText(text.trim())
-      return text
-    } catch {
-      setOcrError('OCR failed. Please try a clearer image.')
-      return ''
-    } finally {
-      setOcrLoading(false)
+  const enterManualFullscreen = () => {
+    setFullscreenTimerKind('manual')
+    void fullscreen.enter()
+  }
+
+  const toggleFullscreen = () => {
+    if (!fullscreen.isFullscreen) {
+      setFullscreenTimerKind(manualRunning ? 'manual' : 'focus')
+    }
+    void fullscreen.toggle()
+  }
+
+  const onTaskLinkedSessionSaved = async (outcome: SessionOutcome | null) => {
+    if (!outcome) return
+
+    if (outcome === 'completed' && activeTask?.id) {
+      try {
+        await updateOrganizationTask(activeTask.id, { status: 'done', progress: 100 })
+      } catch {
+        // Session was saved; task status update can be retried later from Planner.
+      }
+      timerSession.clearActiveTask()
+      setShowTaskCelebration(true)
+      return
+    }
+
+    if (outcome === 'continue') {
+      setMode('focus')
+      setRemainingSeconds(modeDurations.focus * 60)
+      setPomodoroRunning(true)
+      return
+    }
+
+    if (outcome === 'break') {
+      setMode('short')
+      setPomodoroRunning(true)
     }
   }
 
@@ -531,16 +674,30 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           startManual()
         }
       }
+      if (event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        toggleFullscreen()
+      }
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [manualRunning, modeSeconds])
+  }, [manualRunning, modeSeconds, toggleFullscreen])
 
   const modeProgress = modeSeconds > 0 ? (modeSeconds - remainingSeconds) / modeSeconds : 0
   const manualProgress = Math.min(1, manualElapsedSeconds / Math.max(1, modeDurations.focus * 60))
   const streak = streakQuery.data?.currentStreak ?? 0
   const lifetimeSessions = recommendation?.sessionCount ?? 0
+  const isFocusFullscreen = fullscreenTimerKind === 'focus'
+  const fullscreenProgress = isFocusFullscreen ? modeProgress : manualProgress
+  const fullscreenTime = isFocusFullscreen ? formatClock(remainingSeconds) : formatClock(manualElapsedSeconds)
+  const fullscreenRunning = isFocusFullscreen ? pomodoroRunning : manualRunning
+  const fullscreenSessionLabel = activeTask?.name ?? (isFocusFullscreen ? modeTheme[mode].label : 'Manual Study Session')
+  const fullscreenTaskLabel = activeTask
+    ? `${activeTask.courseName ? `Course: ${activeTask.courseName}` : 'Task-linked session'}`
+    : isFocusFullscreen
+      ? 'Linked task: attach when logging this session'
+      : 'Linked task: add one when saving'
 
   return (
     <section className="relative mx-auto w-full max-w-6xl px-1 sm:px-2">
@@ -553,6 +710,40 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
         animate={{ opacity: pomodoroRunning ? 0.95 : 0.65 }}
         transition={{ duration: 0.45 }}
       />
+
+      <AnimatePresence>
+        {showTaskCelebration ? (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mb-3 rounded-xl border border-emerald-300/40 bg-emerald-100/60 px-4 py-2 text-sm font-medium text-emerald-900"
+          >
+            Task completed. Nice work.
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      {activeTask ? (
+        <div className="mb-4 rounded-2xl border border-primary/30 bg-primary/5 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Working on</p>
+              <p className="truncate text-lg font-semibold">{activeTask.name}</p>
+              {activeTask.description ? <p className="mt-1 text-sm text-muted-foreground">{activeTask.description}</p> : null}
+              <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                {activeTask.courseName ? <span>Course: {activeTask.courseName}</span> : null}
+                {timerSession.sessionStartTime ? (
+                  <span>Started: {new Date(timerSession.sessionStartTime).toLocaleTimeString()}</span>
+                ) : null}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={timerSession.clearActiveTask}>
+              Clear task
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid w-full gap-4 md:gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,1fr)]">
         <div className="min-w-0">
@@ -643,12 +834,19 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                     Reset
                   </Button>
                 </motion.div>
+                <motion.div whileTap={{ scale: 0.97 }}>
+                  <Button variant="outline" onClick={enterFocusFullscreen} className="gap-2">
+                    <Maximize2 className="h-4 w-4" />
+                    Fullscreen
+                  </Button>
+                </motion.div>
               </div>
 
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                 <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1">Space: Start/Pause</span>
                 <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1">R: Reset</span>
                 <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1">M: Manual timer</span>
+                <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1">F: Fullscreen</span>
               </div>
             </CardContent>
           </Card>
@@ -706,39 +904,11 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                   <Save className="h-4 w-4" />
                   Save
                 </Button>
+                <Button variant="outline" onClick={enterManualFullscreen} className="gap-2">
+                  <Maximize2 className="h-4 w-4" />
+                  Fullscreen
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card className="w-full border-white/30 bg-card/55 backdrop-blur-xl shadow-soft">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">📄 Image OCR</CardTitle>
-              <CardDescription>Upload an image and extract text with Tesseract OCR.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <input
-                type="file"
-                accept="image/*"
-                className="block w-full cursor-pointer rounded-md border border-input bg-background px-3 py-2 text-sm file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-primary/15 file:px-3 file:py-1.5 file:text-foreground"
-                onChange={async (event) => {
-                  const selectedFile = event.target.files?.[0]
-                  if (!selectedFile) return
-                  await extractTextFromImage(selectedFile)
-                }}
-              />
-
-              {ocrLoading ? (
-                <p className="text-sm text-muted-foreground">Processing image, extracting text...</p>
-              ) : null}
-
-              {ocrError ? <p className="text-sm text-destructive">{ocrError}</p> : null}
-
-              {ocrText ? (
-                <div className="rounded-md border border-border/70 bg-background/70 p-3">
-                  <p className="mb-2 text-xs text-muted-foreground">Extracted from {ocrFileName}</p>
-                  <pre className="whitespace-pre-wrap break-words text-sm">{ocrText}</pre>
-                </div>
-              ) : null}
             </CardContent>
           </Card>
 
@@ -803,6 +973,90 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
         </div>
       </div>
 
+      {fullscreen.isFullscreen ? (
+        <div
+          className={cn(
+            'fixed inset-0 z-[80] flex items-center justify-center overflow-hidden bg-background/95 px-4 py-6',
+            fullscreen.isFallbackFullscreen && 'timer-fullscreen-fallback',
+          )}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Timer fullscreen focus mode"
+        >
+          <motion.div
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            animate={{ opacity: [0.35, 0.7, 0.35], scale: [1, 1.03, 1] }}
+            transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <div className="absolute left-1/2 top-1/2 h-[62vh] w-[62vh] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20 blur-3xl" />
+          </motion.div>
+
+          <div className="relative flex w-full max-w-5xl flex-col items-center gap-5 text-center">
+            <div className="flex w-full items-start justify-between gap-3">
+              <div className="text-left">
+                <p className="text-base font-semibold">{fullscreenSessionLabel}</p>
+                <p className="text-xs text-muted-foreground">{fullscreenTaskLabel}</p>
+              </div>
+              <Button variant="outline" className="gap-2" onClick={() => void fullscreen.exit()}>
+                <Minimize2 className="h-4 w-4" />
+                Exit Fullscreen
+              </Button>
+            </div>
+
+            <CircularTimer
+              mode={isFocusFullscreen ? mode : 'focus'}
+              running={fullscreenRunning}
+              progress={fullscreenProgress}
+              time={fullscreenTime}
+              label={isFocusFullscreen ? modeTheme[mode].label : 'Elapsed'}
+              containerClassName="max-w-[540px]"
+              clockClassName="text-[clamp(5rem,12vw,7.5rem)] leading-none"
+            />
+
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {isFocusFullscreen ? (
+                <>
+                  {!pomodoroRunning ? (
+                    <Button onClick={startPomodoro} className="min-w-28 gap-2">
+                      <Play className="h-4 w-4" />
+                      Start
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" onClick={() => setPomodoroRunning(false)} className="min-w-28 gap-2">
+                      <Pause className="h-4 w-4" />
+                      Pause
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={resetPomodoro} className="gap-2">
+                    <RotateCcw className="h-4 w-4" />
+                    Reset
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {!manualRunning ? (
+                    <Button onClick={startManual} className="gap-2">
+                      <Play className="h-4 w-4" />
+                      Start
+                    </Button>
+                  ) : (
+                    <Button variant="secondary" onClick={() => setManualRunning(false)} className="gap-2">
+                      <Pause className="h-4 w-4" />
+                      Pause
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={resetManual} className="gap-2">
+                    <RotateCcw className="h-4 w-4" />
+                    Reset
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {logModal ? (
         <LogSessionModal
           open={Boolean(logModal)}
@@ -826,6 +1080,11 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           }
           startTime={logModal.startTime}
           endTime={logModal.endTime}
+          activeTask={activeTask}
+          requireOutcomeSelection={Boolean(activeTask && logModal.kind === 'focus')}
+          onSessionSaved={(outcome) => {
+            void onTaskLinkedSessionSaved(outcome)
+          }}
         />
       ) : null}
     </section>

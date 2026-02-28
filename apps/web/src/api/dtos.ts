@@ -41,6 +41,7 @@ export type SessionDto = {
 export type CreateSessionDto = {
   courseId: string
   activityId?: string | null
+  taskId?: string | null
   startTime: string
   endTime: string
   breakMinutes?: number
@@ -685,6 +686,7 @@ export type OrganizationTaskDto = {
   dueAt: string | null
   courseId: string | null
   activityId: string | null
+  timeSpentMinutes: number
   createdAt: string
   updatedAt: string
   subtasks: OrganizationSubtaskDto[]
@@ -704,6 +706,7 @@ export type CreateOrganizationTaskDto = {
   dueAt?: string | null
   courseId?: string | null
   activityId?: string | null
+  timeSpentMinutes?: number
   subtasks?: Array<{ title: string }>
 }
 

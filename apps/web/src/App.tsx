@@ -37,6 +37,7 @@ import { PlannerPage } from '@/features/planner/planner-page'
 import { SessionsPage } from '@/features/sessions/sessions-page'
 import { SettingsPage } from '@/features/settings/settings-page'
 import { TimerPage } from '@/features/timer/timer-page'
+import { TIMER_FULLSCREEN_BODY_CLASS, TIMER_FULLSCREEN_CHANGE_EVENT } from '@/hooks/use-fullscreen'
 import { useSessionSync } from '@/hooks/use-session-sync'
 import { useUiPersonalization } from '@/hooks/use-ui-personalization'
 import { cn } from '@/lib/utils'
@@ -68,12 +69,30 @@ function App() {
   const [createSessionSignal, setCreateSessionSignal] = useState(0)
   const [startTimerSignal, setStartTimerSignal] = useState(0)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [timerFullscreenActive, setTimerFullscreenActive] = useState(false)
   const sync = useSessionSync()
   const meQuery = useQuery({
     queryKey: ['me'],
     queryFn: ({ signal }) => getMe(signal),
   })
   useUiPersonalization(meQuery.data?.uiPreferences)
+
+  useEffect(() => {
+    const syncTimerFullscreenState = () => {
+      setTimerFullscreenActive(
+        document.body.classList.contains(TIMER_FULLSCREEN_BODY_CLASS) || Boolean(document.fullscreenElement),
+      )
+    }
+
+    syncTimerFullscreenState()
+    window.addEventListener(TIMER_FULLSCREEN_CHANGE_EVENT, syncTimerFullscreenState as EventListener)
+    document.addEventListener('fullscreenchange', syncTimerFullscreenState)
+
+    return () => {
+      window.removeEventListener(TIMER_FULLSCREEN_CHANGE_EVENT, syncTimerFullscreenState as EventListener)
+      document.removeEventListener('fullscreenchange', syncTimerFullscreenState)
+    }
+  }, [])
 
   useEffect(() => {
     if (!mobileSidebarOpen) return
@@ -162,7 +181,17 @@ function App() {
     if (activeNav === 'Sessions') return <SessionsPage openCreateSignal={createSessionSignal} />
     if (activeNav === 'Timer') return <TimerPage startFocusSignal={startTimerSignal} />
     if (activeNav === 'Courses') return <CoursesPage />
-    if (activeNav === 'Planner') return <PlannerPage />
+    if (activeNav === 'Planner') {
+      return (
+        <PlannerPage
+          onStartFocusTask={() => {
+            setActiveNav('Timer')
+            setStartTimerSignal((current) => current + 1)
+            window.history.pushState({}, '', '/timer')
+          }}
+        />
+      )
+    }
     if (activeNav === 'Grades') return <GradesPage />
     if (activeNav === 'Calendar') return <CalendarPage />
     if (activeNav === 'Achievements') return <AchievementsPage />
@@ -172,7 +201,7 @@ function App() {
 
   return (
     <div className="app-surface min-h-screen bg-background font-sans text-foreground">
-      {mobileSidebarOpen ? (
+      {!timerFullscreenActive && mobileSidebarOpen ? (
         <button
           type="button"
           className="fixed inset-0 z-30 bg-black/30 md:hidden"
@@ -186,6 +215,7 @@ function App() {
           layout
           className={cn(
             'fixed inset-y-0 left-0 z-40 border-r border-border/70 bg-card/90 p-4 backdrop-blur-sm transition-all duration-200 md:static md:translate-x-0',
+            timerFullscreenActive && 'hidden',
             sidebarCollapsed ? 'md:w-20' : 'md:w-64',
             mobileSidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-64',
           )}
@@ -235,7 +265,12 @@ function App() {
         </motion.aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border/70 bg-background/80 px-4 backdrop-blur-sm md:px-8">
+          <header
+            className={cn(
+              'sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border/70 bg-background/80 px-4 backdrop-blur-sm md:px-8',
+              timerFullscreenActive && 'hidden',
+            )}
+          >
             <div className="flex items-center gap-2">
               <Button variant="outline" size="icon" className="md:hidden" onClick={() => setMobileSidebarOpen(true)}>
                 <Menu className="h-4 w-4" />
@@ -288,7 +323,7 @@ function App() {
             </div>
           </header>
 
-          <main className="space-y-7 p-4 md:p-8">
+          <main className={cn('space-y-7 p-4 md:p-8', timerFullscreenActive && 'space-y-0 p-0')}>
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeNav}

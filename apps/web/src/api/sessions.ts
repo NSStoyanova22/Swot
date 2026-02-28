@@ -98,10 +98,12 @@ function normalizeNote(value: string | undefined) {
 
 function sessionFingerprint(payload: CreateSessionDto) {
   const activityId = payload.activityId ?? ''
+  const taskId = payload.taskId ?? ''
   const breakMinutes = Number(payload.breakMinutes ?? 0)
   return [
     payload.courseId,
     activityId,
+    taskId,
     new Date(payload.startTime).toISOString(),
     new Date(payload.endTime).toISOString(),
     String(breakMinutes),
@@ -171,6 +173,7 @@ async function enqueueSession(payload: CreateSessionDto) {
       ...payload,
       startTime: new Date(payload.startTime).toISOString(),
       endTime: new Date(payload.endTime).toISOString(),
+      taskId: payload.taskId ?? undefined,
       note: payload.note?.trim() || undefined,
       breakMinutes: Number(payload.breakMinutes ?? 0),
     },
@@ -184,6 +187,7 @@ function serverSessionFingerprint(session: SessionDto) {
   return sessionFingerprint({
     courseId: session.courseId,
     activityId: session.activityId ?? undefined,
+    taskId: undefined,
     startTime: session.startTime,
     endTime: session.endTime,
     breakMinutes: session.breakMinutes,
@@ -297,6 +301,7 @@ export async function createSession(body: CreateSessionDto) {
     ...body,
     startTime: new Date(body.startTime).toISOString(),
     endTime: new Date(body.endTime).toISOString(),
+    taskId: body.taskId ?? undefined,
     note: body.note?.trim() || undefined,
     breakMinutes: Number(body.breakMinutes ?? 0),
   }

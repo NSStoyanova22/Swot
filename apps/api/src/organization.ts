@@ -100,5 +100,20 @@ export async function ensureStudyOrganizationTables() {
       INDEX idx_reminders_user_remind_at (user_id, remind_at)
     )
   `);
-}
 
+  const spentMinutesColumn = await prisma.$queryRaw<Array<{ count: bigint | number }>>`
+    SELECT COUNT(*) AS count
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'tasks'
+      AND COLUMN_NAME = 'spent_minutes'
+  `;
+
+  const hasSpentMinutesColumn = Number(spentMinutesColumn[0]?.count ?? 0) > 0;
+  if (!hasSpentMinutesColumn) {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE tasks
+      ADD COLUMN spent_minutes INT NOT NULL DEFAULT 0
+    `);
+  }
+}

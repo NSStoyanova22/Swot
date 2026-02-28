@@ -626,10 +626,14 @@ export async function routes(app: FastifyInstance) {
   });
 
   app.delete("/terms/:termId/grades", async (req, reply) => {
-    const params = req.params as { termId: string };
-    const termId = Number.parseInt(String(params.termId).trim(), 10);
+    const params = req.params as { termId?: string; id?: string };
+    const rawTermId = params.termId ?? params.id ?? "";
+    const termId = Number.parseInt(String(rawTermId).trim(), 10);
     if (!Number.isFinite(termId)) {
-      return reply.code(400).send({ error: "Invalid termId." });
+      req.log.warn({ params }, "delete-term-grades invalid termId");
+      return reply
+        .code(400)
+        .send({ error: "Invalid termId.", receivedTermId: rawTermId });
     }
 
     const termRows = await prisma.$queryRaw<Array<{ id: number }>>`
@@ -2889,11 +2893,12 @@ export async function routes(app: FastifyInstance) {
         due_at: Date | null;
         course_id: string | null;
         activity_id: string | null;
+        spent_minutes: number;
         created_at: Date;
         updated_at: Date;
       }>
     >`
-      SELECT id, user_id, title, description, kind, status, progress, priority, due_at, course_id, activity_id, created_at, updated_at
+      SELECT id, user_id, title, description, kind, status, progress, priority, due_at, course_id, activity_id, spent_minutes, created_at, updated_at
       FROM tasks
       WHERE user_id = ${USER_ID}
       ORDER BY
@@ -2950,6 +2955,7 @@ export async function routes(app: FastifyInstance) {
           dueAt: task.due_at ? new Date(task.due_at).toISOString() : null,
           courseId: task.course_id,
           activityId: task.activity_id,
+          timeSpentMinutes: Number(task.spent_minutes ?? 0),
           createdAt: new Date(task.created_at).toISOString(),
           updatedAt: new Date(task.updated_at).toISOString(),
           subtasks: items.map((sub) => ({
@@ -2977,6 +2983,7 @@ export async function routes(app: FastifyInstance) {
       dueAt?: string | null;
       courseId?: string | null;
       activityId?: string | null;
+      timeSpentMinutes?: number;
       subtasks?: Array<{ title: string }>;
     };
 
@@ -2990,9 +2997,10 @@ export async function routes(app: FastifyInstance) {
     const status = body.status?.trim() || "todo";
     const priority = body.priority?.trim() || "medium";
     const dueAt = body.dueAt ? new Date(body.dueAt) : null;
+    const timeSpentMinutes = Math.max(0, Math.round(Number(body.timeSpentMinutes ?? 0)));
 
     await prisma.$executeRaw`
-      INSERT INTO tasks (user_id, title, description, kind, status, progress, priority, due_at, course_id, activity_id)
+      INSERT INTO tasks (user_id, title, description, kind, status, progress, priority, due_at, course_id, activity_id, spent_minutes)
       VALUES (
         ${USER_ID},
         ${title},
@@ -3003,7 +3011,8 @@ export async function routes(app: FastifyInstance) {
         ${priority},
         ${dueAt},
         ${body.courseId ?? null},
-        ${body.activityId ?? null}
+        ${body.activityId ?? null},
+        ${timeSpentMinutes}
       )
     `;
 
@@ -3036,6 +3045,7 @@ export async function routes(app: FastifyInstance) {
       dueAt: dueAt ? dueAt.toISOString() : null,
       courseId: body.courseId ?? null,
       activityId: body.activityId ?? null,
+      timeSpentMinutes,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       subtasks: subtasks.map((subtask, index) => ({
@@ -3060,6 +3070,7 @@ export async function routes(app: FastifyInstance) {
       dueAt?: string | null;
       courseId?: string | null;
       activityId?: string | null;
+      timeSpentMinutes?: number;
     };
 
     const taskId = Number(params.id);
@@ -3078,9 +3089,10 @@ export async function routes(app: FastifyInstance) {
         due_at: Date | null;
         course_id: string | null;
         activity_id: string | null;
+        spent_minutes: number;
       }>
     >`
-      SELECT title, description, kind, status, progress, priority, due_at, course_id, activity_id
+      SELECT title, description, kind, status, progress, priority, due_at, course_id, activity_id, spent_minutes
       FROM tasks
       WHERE id = ${taskId} AND user_id = ${USER_ID}
       LIMIT 1
@@ -3102,6 +3114,10 @@ export async function routes(app: FastifyInstance) {
       dueAt: body.dueAt === undefined ? row.due_at : body.dueAt ? new Date(body.dueAt) : null,
       courseId: body.courseId === undefined ? row.course_id : body.courseId ?? null,
       activityId: body.activityId === undefined ? row.activity_id : body.activityId ?? null,
+      timeSpentMinutes:
+        body.timeSpentMinutes === undefined
+          ? Number(row.spent_minutes ?? 0)
+          : Math.max(0, Math.round(Number(body.timeSpentMinutes))),
     };
 
     await prisma.$executeRaw`
@@ -3115,7 +3131,8 @@ export async function routes(app: FastifyInstance) {
         priority = ${next.priority},
         due_at = ${next.dueAt},
         course_id = ${next.courseId},
-        activity_id = ${next.activityId}
+        activity_id = ${next.activityId},
+        spent_minutes = ${next.timeSpentMinutes}
       WHERE id = ${taskId} AND user_id = ${USER_ID}
     `;
 
@@ -3811,6 +3828,7 @@ export async function routes(app: FastifyInstance) {
     const body = req.body as {
       courseId: string;
       activityId?: string | null;
+      taskId?: string | null;
       startTime: string;
       endTime: string;
       breakMinutes?: number;
@@ -3848,6 +3866,45 @@ export async function routes(app: FastifyInstance) {
     await recomputeAndStoreAchievements(USER_ID);
     await recomputeAndStoreStreak(USER_ID);
     await recomputeAndStoreProductivity(USER_ID);
+
+    const taskId = body.taskId ? Number(body.taskId) : NaN;
+    if (Number.isInteger(taskId)) {
+      const taskRows = await prisma.$queryRaw<
+        Array<{ progress: number; status: string; spent_minutes: number }>
+      >`
+        SELECT progress, status, spent_minutes
+        FROM tasks
+        WHERE id = ${taskId} AND user_id = ${USER_ID}
+        LIMIT 1
+      `;
+
+      const task = taskRows[0];
+      if (task) {
+        const addedMinutes = Math.max(0, created.durationMinutes);
+        const nextSpentMinutes = Number(task.spent_minutes ?? 0) + addedMinutes;
+        const progressBoost = Math.min(25, Math.max(2, Math.round(addedMinutes / 5)));
+        const boostedProgress = Math.min(100, Number(task.progress ?? 0) + progressBoost);
+        const nextProgress = task.status === "done" ? 100 : boostedProgress;
+        const nextStatus =
+          task.status === "done"
+            ? "done"
+            : nextProgress >= 100
+              ? "done"
+              : task.status === "todo"
+                ? "in_progress"
+                : task.status;
+
+        await prisma.$executeRaw`
+          UPDATE tasks
+          SET
+            spent_minutes = ${nextSpentMinutes},
+            progress = ${nextProgress},
+            status = ${nextStatus}
+          WHERE id = ${taskId} AND user_id = ${USER_ID}
+        `;
+      }
+    }
+
     return created;
   });
 

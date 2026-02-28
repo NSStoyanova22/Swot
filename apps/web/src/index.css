@@ -270,8 +270,19 @@ body {
     border-color var(--motion-medium) var(--motion-ease);
 }
 
+body.timer-fullscreen-active {
+  overflow: hidden;
+}
+
 #root {
   min-height: 100vh;
+}
+
+.timer-fullscreen-fallback {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
 }
 
 .app-surface {

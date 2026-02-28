@@ -36,6 +36,12 @@ export async function updateOrganizationTask(id: string, payload: UpdateOrganiza
   })
 }
 
+export async function deleteOrganizationTask(id: string) {
+  return apiRequest<{ ok: boolean }>(`/organization/tasks/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function createTaskSubtask(taskId: string, title: string) {
   return apiRequest<{ id: string; taskId: string; title: string; done: boolean; sortOrder: number }>(
     `/organization/tasks/${taskId}/subtasks`,
@@ -84,4 +90,3 @@ export async function getOrganizationUnified(query: RangeQuery = {}, signal?: Ab
     signal,
   })
 }
-

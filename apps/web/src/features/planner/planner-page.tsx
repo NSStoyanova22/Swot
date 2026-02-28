@@ -1,21 +1,18 @@
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, CalendarPlus2, ChevronLeft, ChevronRight, Clock3, GripVertical, ListChecks, Pencil, Plus, Target, Trash2 } from 'lucide-react'
+import { CalendarPlus2, ChevronLeft, ChevronRight, GripVertical, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 
 import { getActivities } from '@/api/activities'
 import { getCourses } from '@/api/courses'
 import type { CreatePlannerBlockDto, OrganizationTaskDto, PlannerBlockDto } from '@/api/dtos'
 import {
-  createOrganizationReminder,
   createOrganizationScheduleBlock,
   createOrganizationTask,
-  createTaskSubtask,
+  deleteOrganizationTask,
   getOrganizationReminders,
   getOrganizationScheduleBlocks,
   getOrganizationTasks,
-  getOrganizationUnified,
   updateOrganizationTask,
-  updateTaskSubtask,
 } from '@/api/organization'
 import {
   createPlannerBlock,
@@ -27,7 +24,6 @@ import {
 import { PageContainer, PageHeader } from '@/components/layout/page-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -40,6 +36,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
+import { useTimerSession } from '@/hooks/use-timer-session'
 import { cn } from '@/lib/utils'
 
 const plannerBlocksKey = ['planner-blocks'] as const
@@ -63,9 +60,8 @@ type PlannerFormState = {
 type TaskComposerState = {
   title: string
   dueAt: string
-  kind: 'task' | 'exam'
   priority: 'low' | 'medium' | 'high'
-  subtasks: string
+  courseId: string
 }
 
 type ScheduleComposerState = {
@@ -353,18 +349,20 @@ function PlannerEditorDialog({
   )
 }
 
-export function PlannerPage() {
+export function PlannerPage({ onStartFocusTask }: { onStartFocusTask?: () => void } = {}) {
+  const timerSession = useTimerSession()
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState<'tasks' | 'schedule' | 'reminders'>('tasks')
+  const [taskComposerOpen, setTaskComposerOpen] = useState(false)
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()))
   const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null)
   const [editorState, setEditorState] = useState<PlannerEditorState | null>(null)
   const [taskComposer, setTaskComposer] = useState<TaskComposerState>({
     title: '',
     dueAt: '',
-    kind: 'task',
     priority: 'medium',
-    subtasks: '',
+    courseId: '',
   })
   const [scheduleComposer, setScheduleComposer] = useState<ScheduleComposerState>({
     title: '',
@@ -392,17 +390,17 @@ export function PlannerPage() {
     queryKey: ['org-tasks', weekFrom, timelineTo],
     queryFn: ({ signal }) => getOrganizationTasks({ from: weekFrom, to: timelineTo }, signal),
   })
-  const remindersQuery = useQuery({
-    queryKey: ['org-reminders'],
-    queryFn: ({ signal }) => getOrganizationReminders(signal),
+  const coursesQuery = useQuery({
+    queryKey: ['courses'],
+    queryFn: ({ signal }) => getCourses(signal),
   })
   const scheduleBlocksQuery = useQuery({
     queryKey: ['org-schedule-blocks'],
     queryFn: ({ signal }) => getOrganizationScheduleBlocks(signal),
   })
-  const unifiedQuery = useQuery({
-    queryKey: ['org-unified', weekFrom, timelineTo],
-    queryFn: ({ signal }) => getOrganizationUnified({ from: weekFrom, to: timelineTo }, signal),
+  const remindersQuery = useQuery({
+    queryKey: ['org-reminders'],
+    queryFn: ({ signal }) => getOrganizationReminders(signal),
   })
 
   const deleteMutation = useMutation({
@@ -463,9 +461,8 @@ export function PlannerPage() {
       setTaskComposer({
         title: '',
         dueAt: '',
-        kind: 'task',
         priority: 'medium',
-        subtasks: '',
+        courseId: '',
       })
       toast({ variant: 'success', title: 'Task added' })
     },
@@ -481,37 +478,20 @@ export function PlannerPage() {
     },
   })
 
-  const updateSubtaskMutation = useMutation({
-    mutationFn: ({ taskId, subtaskId, done }: { taskId: string; subtaskId: string; done: boolean }) =>
-      updateTaskSubtask(taskId, subtaskId, { done }),
+  const deleteTaskMutation = useMutation({
+    mutationFn: deleteOrganizationTask,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
-    },
-  })
-
-  const createSubtaskMutation = useMutation({
-    mutationFn: ({ taskId, title }: { taskId: string; title: string }) =>
-      createTaskSubtask(taskId, title),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['org-tasks'] })
-    },
-  })
-
-  const createReminderMutation = useMutation({
-    mutationFn: createOrganizationReminder,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['org-reminders'] })
       queryClient.invalidateQueries({ queryKey: ['org-unified'] })
-      toast({ variant: 'success', title: 'Reminder created' })
+      toast({ variant: 'success', title: 'Task deleted' })
     },
-    onError: () => toast({ variant: 'error', title: 'Could not create reminder' }),
+    onError: () => toast({ variant: 'error', title: 'Could not delete task' }),
   })
 
   const createScheduleBlockMutation = useMutation({
     mutationFn: createOrganizationScheduleBlock,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['org-schedule-blocks'] })
-      queryClient.invalidateQueries({ queryKey: ['org-unified'] })
       setScheduleComposer({
         title: '',
         dayOfWeek: 1,
@@ -555,33 +535,56 @@ export function PlannerPage() {
   })}`
 
   const tasks = tasksQuery.data ?? []
-  const reminders = remindersQuery.data ?? []
-  const unifiedItems = unifiedQuery.data ?? []
+  const courses = coursesQuery.data ?? []
   const scheduleBlocks = scheduleBlocksQuery.data ?? []
+  const reminders = remindersQuery.data ?? []
+  const [upcomingSort, setUpcomingSort] = useState<'asc' | 'desc'>('asc')
 
-  const upcomingAlerts = useMemo(() => {
+  const todayTasks = useMemo(() => {
+    const todayKey = toDateKey(new Date())
+    return tasks.filter((task) => task.dueAt && toDateKey(new Date(task.dueAt)) === todayKey)
+  }, [tasks])
+
+  const upcomingTasks = useMemo(() => {
     const now = Date.now()
-    const inSevenDays = now + 7 * 24 * 60 * 60 * 1000
-    const dueTasks = tasks
-      .filter((task) => task.dueAt)
-      .map((task) => ({ type: 'task' as const, title: task.kind === 'exam' ? `Exam: ${task.title}` : task.title, at: new Date(task.dueAt ?? '').getTime() }))
-      .filter((item) => item.at >= now && item.at <= inSevenDays)
+    const list = tasks.filter((task) => {
+      if (task.status === 'done') return false
+      if (!task.dueAt) return true
+      return new Date(task.dueAt).getTime() >= now
+    })
 
-    const dueReminders = reminders
-      .filter((reminder) => reminder.nextTriggerAt)
-      .map((reminder) => ({ type: 'reminder' as const, title: reminder.title, at: new Date(reminder.nextTriggerAt ?? '').getTime() }))
-      .filter((item) => item.at >= now && item.at <= inSevenDays)
+    list.sort((a, b) => {
+      const aTs = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER
+      const bTs = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER
+      return upcomingSort === 'asc' ? aTs - bTs : bTs - aTs
+    })
 
-    return [...dueTasks, ...dueReminders].sort((a, b) => a.at - b.at).slice(0, 8)
-  }, [reminders, tasks])
+    return list
+  }, [tasks, upcomingSort])
 
-  const onToggleSubtask = (task: OrganizationTaskDto, subtaskId: string, done: boolean) => {
-    updateSubtaskMutation.mutate({ taskId: task.id, subtaskId, done })
-    const total = Math.max(1, task.subtasks.length)
-    const completed = task.subtasks.reduce((sum, sub) => sum + (sub.id === subtaskId ? (done ? 1 : 0) : sub.done ? 1 : 0), 0)
-    const progress = Math.round((completed / total) * 100)
-    const status = progress >= 100 ? 'done' : progress > 0 ? 'in_progress' : 'todo'
-    updateTaskMutation.mutate({ id: task.id, payload: { progress, status } })
+  const onStartFocusForTask = (task: OrganizationTaskDto) => {
+    const taskTitle = task.kind === 'exam' ? `Exam: ${task.title}` : task.title
+    const courseName = task.courseId ? courses.find((course) => course.id === task.courseId)?.name ?? null : null
+
+    timerSession.setActiveTask(
+      {
+        id: task.id,
+        name: taskTitle,
+        description: task.description,
+        courseId: task.courseId,
+        courseName,
+        activityId: task.activityId,
+      },
+      { sessionType: 'pomodoro', sessionStartTime: new Date().toISOString() },
+    )
+
+    onStartFocusTask?.()
+  }
+
+  const onEditTask = (task: OrganizationTaskDto) => {
+    const nextTitle = window.prompt('Edit task title', task.title)?.trim()
+    if (!nextTitle || nextTitle === task.title) return
+    updateTaskMutation.mutate({ id: task.id, payload: { title: nextTitle } })
   }
 
   const handleDrop = (targetDate: Date) => {
@@ -612,27 +615,14 @@ export function PlannerPage() {
 
   if (blocksQuery.isPending || overviewQuery.isPending) {
     return (
-      <PageContainer>
-        <Card className="shadow-soft">
-          <CardHeader>
-            <Skeleton className="h-6 w-64" />
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className="h-20 w-full" />
-            ))}
-          </CardContent>
-        </Card>
-        <Card className="shadow-soft">
-          <CardHeader>
-            <Skeleton className="h-6 w-48" />
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-7">
-            {Array.from({ length: 7 }).map((_, index) => (
-              <Skeleton key={index} className="h-44 w-full" />
-            ))}
-          </CardContent>
-        </Card>
+      <PageContainer className="space-y-5">
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Skeleton className="h-48 w-full" />
+          <Skeleton className="h-48 w-full" />
+          <Skeleton className="h-48 w-full" />
+        </div>
+        <Skeleton className="h-72 w-full" />
+        <Skeleton className="h-80 w-full" />
       </PageContainer>
     )
   }
@@ -653,9 +643,236 @@ export function PlannerPage() {
             🗓️ Study Planner
           </span>
         }
-        subtitle="Plan future study blocks, drag to adjust your week, and compare planned vs actual."
+        subtitle="Tasks first. Then schedule and reminders."
         actions={(
-          <>
+          <Button
+            onClick={() => {
+              setActiveTab('tasks')
+              setTaskComposerOpen(true)
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            Add Task
+          </Button>
+        )}
+      />
+
+      <section className="flex items-center gap-2 rounded-xl border border-border/70 bg-card/80 p-1">
+        <Button
+          variant={activeTab === 'tasks' ? 'secondary' : 'ghost'}
+          className="h-9 flex-1"
+          onClick={() => setActiveTab('tasks')}
+        >
+          Tasks
+        </Button>
+        <Button
+          variant={activeTab === 'schedule' ? 'secondary' : 'ghost'}
+          className="h-9 flex-1"
+          onClick={() => setActiveTab('schedule')}
+        >
+          Schedule
+        </Button>
+        <Button
+          variant={activeTab === 'reminders' ? 'secondary' : 'ghost'}
+          className="h-9 flex-1"
+          onClick={() => setActiveTab('reminders')}
+        >
+          Reminders
+        </Button>
+      </section>
+
+      {activeTab === 'tasks' ? (
+        <section className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-border/70 bg-card/80 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold">Today&apos;s Tasks</h2>
+                <Badge variant="outline">{todayTasks.length}</Badge>
+              </div>
+              <div className="space-y-2">
+                {todayTasks.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+                    No tasks due today.
+                  </p>
+                ) : (
+                  todayTasks.slice(0, 5).map((task) => (
+                    <div key={task.id} className="rounded-md border border-border/70 bg-background/70 p-2.5">
+                      <p className="truncate text-sm font-medium">{task.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {task.dueAt ? new Date(task.dueAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No due time'}
+                      </p>
+                      <Button size="sm" variant="outline" className="mt-2 h-7 gap-1.5 px-2.5 text-xs" onClick={() => onStartFocusForTask(task)}>
+                        <Play className="h-3 w-3" />
+                        Start Focus
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-border/70 bg-card/80 p-4">
+              <h2 className="mb-3 text-sm font-semibold">Active Task</h2>
+              {timerSession.activeTaskId ? (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                  <p className="text-sm font-semibold">{timerSession.activeTaskName}</p>
+                  {timerSession.activeTaskCourseName ? (
+                    <p className="mt-1 text-xs text-muted-foreground">Course: {timerSession.activeTaskCourseName}</p>
+                  ) : null}
+                  <div className="mt-3 flex gap-2">
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => onStartFocusTask?.()}>
+                      Start Focus
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={timerSession.clearActiveTask}>
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="rounded-md border border-dashed border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+                  No active task.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {taskComposerOpen ? (
+            <div className="rounded-xl border border-border/70 bg-card/80 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold">Quick Add Task</h2>
+                <Button variant="ghost" size="sm" onClick={() => setTaskComposerOpen(false)}>Close</Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                <Input
+                  value={taskComposer.title}
+                  onChange={(event) => setTaskComposer((current) => ({ ...current, title: event.target.value }))}
+                  placeholder="Task title"
+                />
+                <Input
+                  type="datetime-local"
+                  value={taskComposer.dueAt}
+                  onChange={(event) => setTaskComposer((current) => ({ ...current, dueAt: event.target.value }))}
+                />
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+                  value={taskComposer.courseId}
+                  onChange={(event) => setTaskComposer((current) => ({ ...current, courseId: event.target.value }))}
+                >
+                  <option value="">No course</option>
+                  {courses.map((course) => (
+                    <option key={course.id} value={course.id}>
+                      {course.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+                  value={taskComposer.priority}
+                  onChange={(event) => setTaskComposer((current) => ({ ...current, priority: event.target.value as 'low' | 'medium' | 'high' }))}
+                >
+                  <option value="high">High priority</option>
+                  <option value="medium">Medium priority</option>
+                  <option value="low">Low priority</option>
+                </select>
+              </div>
+              <Button
+                className="mt-3"
+                onClick={() =>
+                  createTaskMutation.mutate({
+                    title: taskComposer.title.trim(),
+                    dueAt: taskComposer.dueAt ? new Date(taskComposer.dueAt).toISOString() : undefined,
+                    kind: 'task',
+                    priority: taskComposer.priority,
+                    courseId: taskComposer.courseId || null,
+                    status: 'todo',
+                  })
+                }
+                disabled={!taskComposer.title.trim() || createTaskMutation.isPending}
+              >
+                <Plus className="h-4 w-4" />
+                Create Task
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="space-y-3 rounded-xl border border-border/70 bg-card/80 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Upcoming Tasks</h2>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-muted-foreground">Sort</span>
+                <select
+                  className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                  value={upcomingSort}
+                  onChange={(event) => setUpcomingSort(event.target.value as 'asc' | 'desc')}
+                >
+                  <option value="asc">Date: soonest</option>
+                  <option value="desc">Date: latest</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {upcomingTasks.length === 0 ? (
+                <p className="rounded-md border border-dashed border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+                  No upcoming tasks.
+                </p>
+              ) : (
+                upcomingTasks.map((task) => {
+                  const taskCourse = task.courseId ? courses.find((course) => course.id === task.courseId)?.name ?? 'Unknown course' : 'No course'
+                  const priorityTone =
+                    task.priority === 'high'
+                      ? 'border-rose-300 bg-rose-100 text-rose-700'
+                      : task.priority === 'medium'
+                        ? 'border-amber-300 bg-amber-100 text-amber-700'
+                        : 'border-slate-300 bg-slate-100 text-slate-700'
+                  return (
+                    <div key={task.id} className="rounded-lg border border-border/70 bg-background/75 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{task.kind === 'exam' ? `Exam: ${task.title}` : task.title}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {task.dueAt ? new Date(task.dueAt).toLocaleString() : 'No deadline'} • {taskCourse}
+                          </p>
+                        </div>
+                        <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', priorityTone)}>
+                          {task.priority}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Button size="sm" variant="outline" className="h-8 gap-1.5 px-2.5 text-xs" onClick={() => onStartFocusForTask(task)}>
+                          <Play className="h-3 w-3" />
+                          Start Focus
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-8 px-2.5 text-xs" onClick={() => onEditTask(task)}>
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 px-2.5 text-xs text-destructive hover:text-destructive"
+                          onClick={() => deleteTaskMutation.mutate(task.id)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </Button>
+                        {timerSession.activeTaskId === task.id ? (
+                          <span className="rounded-full border border-emerald-400/40 bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                            Running
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {activeTab === 'schedule' ? (
+        <section className="space-y-5">
+          <div className="flex items-center gap-2">
             <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, -7))}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
@@ -663,352 +880,96 @@ export function PlannerPage() {
             <Button variant="outline" size="icon" onClick={() => setWeekStart((current) => addDays(current, 7))}>
               <ChevronRight className="h-4 w-4" />
             </Button>
-            <Button onClick={() => setEditorState({ mode: 'create', selectedDate: weekDays[0] })}>
-              <Plus className="h-4 w-4" />
-              Add block
-            </Button>
-          </>
-        )}
-      />
+          </div>
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Planned</p>
-          <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.plannedMinutes)}</p>
-        </div>
-        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Actual</p>
-          <p className="mt-1 text-xl font-semibold">{formatMinutes(overview.actualMinutes)}</p>
-        </div>
-        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Variance</p>
-          <p className={cn('mt-1 text-xl font-semibold', overview.varianceMinutes < 0 ? 'text-destructive' : 'text-emerald-600')}>
-            {overview.varianceMinutes > 0 ? '+' : ''}
-            {formatMinutes(overview.varianceMinutes)}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border/70 bg-card/80 p-4 shadow-soft">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Missed blocks</p>
-          <p className="mt-1 text-xl font-semibold">{overview.missedSessions}</p>
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-6 lg:flex-row">
-        <div className="w-full lg:max-w-sm lg:w-[360px] shrink-0">
-          <Card className="w-full min-w-0 shadow-soft">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Bell className="h-4 w-4 text-primary" />
-                Deadline Alerts
-              </CardTitle>
-              <CardDescription className="break-words">
-                Upcoming tasks, exams, and reminders in the next 7 days.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="w-full space-y-2">
-              {upcomingAlerts.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                  No upcoming alerts. Add task deadlines or reminders.
-                </p>
-              ) : (
-                upcomingAlerts.map((alert, index) => (
-                  <div key={`${alert.type}-${alert.title}-${index}`} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                    <p className="break-words text-sm font-medium">{alert.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {alert.type} • {new Date(alert.at).toLocaleString()}
-                    </p>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="min-w-0 flex-1 w-full">
-          <Card className="w-full min-w-0 shadow-soft">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Clock3 className="h-4 w-4 text-primary" />
-                Unified Schedule Timeline
-              </CardTitle>
-              <CardDescription className="break-words">
-                Planner blocks, sessions, reminders, tasks, and rotating timetable in one view.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="min-w-0 space-y-2">
-              {unifiedQuery.isPending ? (
-                <Skeleton className="h-24 w-full" />
-              ) : unifiedItems.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                  Timeline is empty for this range.
-                </p>
-              ) : (
-                unifiedItems.slice(0, 16).map((item) => (
-                  <div key={item.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="min-w-0 break-words text-sm font-semibold">{item.title}</p>
-                      <Badge variant="outline">{item.type}</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(item.startTime).toLocaleString()}
-                      {item.endTime ? ` - ${new Date(item.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-                    </p>
-                    <p className="break-words text-xs text-muted-foreground">{item.meta}</p>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Card className="min-w-0 h-full shadow-soft">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <ListChecks className="h-4 w-4 text-primary" />
-              Tasks & Exams
-            </CardTitle>
-            <CardDescription>Create deadlines with subtasks and track progress.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input
-                value={taskComposer.title}
-                onChange={(event) => setTaskComposer((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Task title"
-              />
-              <Input
-                type="datetime-local"
-                value={taskComposer.dueAt}
-                onChange={(event) => setTaskComposer((current) => ({ ...current, dueAt: event.target.value }))}
-              />
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
-                value={taskComposer.kind}
-                onChange={(event) => setTaskComposer((current) => ({ ...current, kind: event.target.value as 'task' | 'exam' }))}
-              >
-                <option value="task">Task</option>
-                <option value="exam">Exam</option>
-              </select>
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
-                value={taskComposer.priority}
-                onChange={(event) => setTaskComposer((current) => ({ ...current, priority: event.target.value as 'low' | 'medium' | 'high' }))}
-              >
-                <option value="high">High priority</option>
-                <option value="medium">Medium priority</option>
-                <option value="low">Low priority</option>
-              </select>
-            </div>
+        <div className="rounded-xl border border-border/70 bg-card/80 p-4">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Timetable Builder</h2>
+            <span className="text-xs text-muted-foreground">One primary action: add block schedule</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-5">
             <Input
-              value={taskComposer.subtasks}
-              onChange={(event) => setTaskComposer((current) => ({ ...current, subtasks: event.target.value }))}
-              placeholder="Subtasks separated by commas"
+              className="md:col-span-2"
+              value={scheduleComposer.title}
+              onChange={(event) => setScheduleComposer((current) => ({ ...current, title: event.target.value }))}
+              placeholder="Block title"
+            />
+            <select
+              className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
+              value={scheduleComposer.dayOfWeek}
+              onChange={(event) => setScheduleComposer((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))}
+            >
+              {weekdayLabels.map((day, index) => (
+                <option key={day} value={index + 1}>{day}</option>
+              ))}
+            </select>
+            <Input
+              type="time"
+              value={scheduleComposer.startTime}
+              onChange={(event) => setScheduleComposer((current) => ({ ...current, startTime: event.target.value }))}
+            />
+            <Input
+              type="time"
+              value={scheduleComposer.endTime}
+              onChange={(event) => setScheduleComposer((current) => ({ ...current, endTime: event.target.value }))}
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Input
+              className="w-44"
+              type="number"
+              min={0}
+              value={scheduleComposer.rotationIntervalDays}
+              onChange={(event) => setScheduleComposer((current) => ({ ...current, rotationIntervalDays: event.target.value }))}
+              placeholder="Rotate every N days"
             />
             <Button
               onClick={() =>
-                createTaskMutation.mutate({
-                  title: taskComposer.title.trim(),
-                  dueAt: taskComposer.dueAt ? new Date(taskComposer.dueAt).toISOString() : undefined,
-                  kind: taskComposer.kind,
-                  priority: taskComposer.priority,
-                  status: 'todo',
-                  subtasks: taskComposer.subtasks
-                    .split(',')
-                    .map((item) => item.trim())
-                    .filter(Boolean)
-                    .map((title) => ({ title })),
+                createScheduleBlockMutation.mutate({
+                  title: scheduleComposer.title.trim(),
+                  dayOfWeek: scheduleComposer.dayOfWeek,
+                  startTime: scheduleComposer.startTime,
+                  endTime: scheduleComposer.endTime,
+                  rotationIntervalDays: scheduleComposer.rotationIntervalDays
+                    ? Math.max(1, Number(scheduleComposer.rotationIntervalDays))
+                    : undefined,
                 })
               }
-              disabled={!taskComposer.title.trim() || createTaskMutation.isPending}
+              disabled={!scheduleComposer.title.trim() || createScheduleBlockMutation.isPending}
             >
               <Plus className="h-4 w-4" />
-              Add task
+              Add Block Schedule
             </Button>
+          </div>
 
-            <div className="space-y-2">
-              {tasksQuery.isPending ? (
-                <Skeleton className="h-20 w-full" />
-              ) : tasks.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground">
-                  No tasks yet.
-                </p>
-              ) : (
-                tasks.slice(0, 8).map((task) => (
-                  <div key={task.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold">{task.kind === 'exam' ? `Exam: ${task.title}` : task.title}</p>
-                      <Badge variant="outline">{task.progress}%</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {task.dueAt ? new Date(task.dueAt).toLocaleString() : 'No deadline'} • {task.priority}
-                    </p>
-                    <div className="mt-2 h-2 rounded-full bg-secondary">
-                      <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${task.progress}%` }} />
-                    </div>
-                    <div className="mt-2 space-y-1">
-                      {task.subtasks.map((sub) => (
-                        <label key={sub.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            checked={sub.done}
-                            onChange={(event) => onToggleSubtask(task, sub.id, event.target.checked)}
-                          />
-                          <span className={cn(sub.done && 'line-through')}>{sub.title}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Input
-                        placeholder="Add subtask"
-                        className="h-8 text-xs"
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter') return
-                          const target = event.currentTarget
-                          const value = target.value.trim()
-                          if (!value) return
-                          createSubtaskMutation.mutate({ taskId: task.id, title: value })
-                          target.value = ''
-                        }}
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          createReminderMutation.mutate({
-                            taskId: task.id,
-                            title: `${task.kind === 'exam' ? 'Exam' : 'Task'} reminder: ${task.title}`,
-                            remindAt: task.dueAt ?? new Date().toISOString(),
-                          })
-                        }
-                      >
-                        Remind
-                      </Button>
-                    </div>
+          {scheduleBlocks.length > 0 ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {scheduleBlocks.slice(0, 10).map((block) => (
+                <div key={block.id} className="rounded-lg border border-border/70 bg-background/70 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">{block.title}</p>
+                    <Badge variant="outline">{weekdayLabels[Math.max(0, block.dayOfWeek - 1)]}</Badge>
                   </div>
-                ))
-              )}
+                  <p className="text-xs text-muted-foreground">
+                    {block.startTime} - {block.endTime}
+                    {block.rotationIntervalDays ? ` • every ${block.rotationIntervalDays}d` : ''}
+                  </p>
+                </div>
+              ))}
             </div>
-          </CardContent>
-        </Card>
+          ) : null}
+        </div>
 
-        <Card className="min-w-0 h-full shadow-soft">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Target className="h-4 w-4 text-primary" />
-              Custom Timetable Builder
-            </CardTitle>
-            <CardDescription>Create block schedules and optional rotations for recurring study structure.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-5">
-              <Input
-                className="md:col-span-2"
-                value={scheduleComposer.title}
-                onChange={(event) => setScheduleComposer((current) => ({ ...current, title: event.target.value }))}
-                placeholder="Block title"
-              />
-              <select
-                className="flex h-10 w-full rounded-md border border-input bg-background/80 px-3 text-sm"
-                value={scheduleComposer.dayOfWeek}
-                onChange={(event) => setScheduleComposer((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))}
-              >
-                {weekdayLabels.map((day, index) => (
-                  <option key={day} value={index + 1}>{day}</option>
-                ))}
-              </select>
-              <Input
-                type="time"
-                value={scheduleComposer.startTime}
-                onChange={(event) => setScheduleComposer((current) => ({ ...current, startTime: event.target.value }))}
-              />
-              <Input
-                type="time"
-                value={scheduleComposer.endTime}
-                onChange={(event) => setScheduleComposer((current) => ({ ...current, endTime: event.target.value }))}
-              />
+        <div className="rounded-xl border border-border/70 bg-card/80 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Weekly Schedule Grid</h2>
+            <div className="flex gap-3 text-xs text-muted-foreground">
+              <span>Planned {formatMinutes(overview.plannedMinutes)}</span>
+              <span>Actual {formatMinutes(overview.actualMinutes)}</span>
+              <span>Variance {overview.varianceMinutes > 0 ? '+' : ''}{formatMinutes(overview.varianceMinutes)}</span>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                className="w-44"
-                type="number"
-                min={0}
-                value={scheduleComposer.rotationIntervalDays}
-                onChange={(event) => setScheduleComposer((current) => ({ ...current, rotationIntervalDays: event.target.value }))}
-                placeholder="Rotate every N days"
-              />
-              <Button
-                onClick={() =>
-                  createScheduleBlockMutation.mutate({
-                    title: scheduleComposer.title.trim(),
-                    dayOfWeek: scheduleComposer.dayOfWeek,
-                    startTime: scheduleComposer.startTime,
-                    endTime: scheduleComposer.endTime,
-                    rotationIntervalDays: scheduleComposer.rotationIntervalDays
-                      ? Math.max(1, Number(scheduleComposer.rotationIntervalDays))
-                      : undefined,
-                  })
-                }
-                disabled={!scheduleComposer.title.trim() || createScheduleBlockMutation.isPending}
-              >
-                <Plus className="h-4 w-4" />
-                Add block schedule
-              </Button>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              {scheduleBlocksQuery.isPending ? (
-                <>
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                </>
-              ) : scheduleBlocks.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-border bg-background/70 p-3 text-sm text-muted-foreground sm:col-span-2">
-                  No timetable blocks yet.
-                </p>
-              ) : (
-                scheduleBlocks.slice(0, 10).map((block) => (
-                  <div key={block.id} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-semibold">{block.title}</p>
-                      <Badge variant="outline">{weekdayLabels[Math.max(0, block.dayOfWeek - 1)]}</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {block.startTime} - {block.endTime}
-                      {block.rotationIntervalDays ? ` • rotates every ${block.rotationIntervalDays}d` : ''}
-                    </p>
-                    <div className="mt-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          const nextReminder = new Date()
-                          nextReminder.setMinutes(nextReminder.getMinutes() + 30)
-                          createReminderMutation.mutate({
-                            title: `Study session reminder: ${block.title}`,
-                            remindAt: nextReminder.toISOString(),
-                          })
-                        }}
-                      >
-                        <Bell className="h-3.5 w-3.5" />
-                        Reminder
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </section>
-
-      <Card className="min-w-0 shadow-soft">
-        <CardHeader>
-          <CardTitle>📆 Weekly Schedule</CardTitle>
-          <CardDescription>Drag any block to another day. Click a block to edit details.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7">
           {weekDays.map((day, index) => {
             const key = toDateKey(day)
             const dayBlocks = blocksByDay.get(key) ?? []
@@ -1097,46 +1058,34 @@ export function PlannerPage() {
               </div>
             )
           })}
-        </CardContent>
-      </Card>
+          </div>
+        </div>
+      </section>
+      ) : null}
 
-      <Card className="shadow-soft">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Clock3 className="h-4 w-4 text-primary" />
-            Planned vs actual
-          </CardTitle>
-          <CardDescription>
-            Planned minutes are from scheduled blocks. Actual minutes are matched from logged sessions in overlapping windows.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {overview.plannedMinutes === 0 ? (
-            <div className="rounded-lg border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
-              Start by adding your first planned block for this week. Missed sessions and variance will appear automatically.
-            </div>
+      {activeTab === 'reminders' ? (
+        <section className="space-y-3 rounded-xl border border-border/70 bg-card/80 p-4">
+          <h2 className="text-sm font-semibold">Reminders</h2>
+          {reminders.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+              No reminders yet.
+            </p>
           ) : (
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-                <p className="text-xs text-muted-foreground">Completion ratio</p>
-                <p className="text-lg font-semibold">
-                  {Math.round((overview.actualMinutes / Math.max(1, overview.plannedMinutes)) * 100)}%
-                </p>
-              </div>
-              <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-                <p className="text-xs text-muted-foreground">Missed tracking</p>
-                <p className="text-lg font-semibold">{overview.missedSessions} missed</p>
-              </div>
-              <div className="rounded-lg border border-border/70 bg-background/80 p-3">
-                <p className="text-xs text-muted-foreground">Schedule health</p>
-                <p className="text-lg font-semibold">
-                  {overview.varianceMinutes >= 0 ? 'On pace' : 'Behind plan'}
-                </p>
-              </div>
-            </div>
+            reminders
+              .slice()
+              .sort((a, b) => new Date(a.nextTriggerAt ?? a.remindAt).getTime() - new Date(b.nextTriggerAt ?? b.remindAt).getTime())
+              .slice(0, 24)
+              .map((reminder) => (
+                <div key={reminder.id} className="rounded-md border border-border/70 bg-background/75 p-3">
+                  <p className="text-sm font-medium">{reminder.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Next: {new Date(reminder.nextTriggerAt ?? reminder.remindAt).toLocaleString()} • {reminder.repeatRule}
+                  </p>
+                </div>
+              ))
           )}
-        </CardContent>
-      </Card>
+        </section>
+      ) : null}
 
       <PlannerEditorDialog
         open={Boolean(editorState)}
