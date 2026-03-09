@@ -26,6 +26,15 @@ The name **SWOT** is a nod to the classic strategic planning technique, repurpos
 * **🎯 Deep-Linking**: Dashboard tiles aren't just for show—click a metric to jump directly to the evidence and raw data.
 * **🎧 Focus Mode**: Built-in noise generator (Rain, Cafe, White Noise) and Lo-Fi integration.
 * **📅 Full Organization**: Integrated calendar, task management with subtasks, and iCal/PDF exports.
+* **⚡️ Personalisation**: Change of theme, Study Preferences, Accent colour, Grade risk and many more. 
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/0d3275b5-6425-4d8c-9ed5-72169f33b968" width="40%" alt="Dashboard" />
+  <img src="https://github.com/user-attachments/assets/fee9fa5d-17f4-4268-ba72-25079e3e9fba" width="40%" alt="Planner" />
+</p>
+
+
+
 
 ---
 
@@ -108,9 +117,27 @@ Swot/
 I built this for myself, but I'd love for it to help others too. If you have an idea for a new insight or a better way to track sessions, feel free to fork and submit a PR!
 
 ---
+## 👤 About Me
 
-## 📝 License
-This project is currently unlicensed, but open to community use.
+I'm a student developer who believes that tools for growth should be accessible and data-driven. I built **SWOT** to bridge the gap between simple timers and complex academic management.
+
+* **GitHub**: [NSStoyanova22](https://github.com/NSStoyanova22)
+* **LinkedIn**: [Nikol Stoyanova](https://www.linkedin.com/in/nikol-stoyanova-077b912b2/)
+
+
+---
+
+## ⚖️ License
+
+This project is licensed under the **MIT License**. 
+
+Copyright (c) 2026 [Nikol Stoyanova]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 *Built with ❤️ by a student who just wanted a better way to study.*
