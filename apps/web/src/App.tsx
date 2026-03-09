@@ -8,7 +8,6 @@ import {
   CalendarClock,
   CalendarDays,
   Clock3,
-  Flower2,
   Gauge,
   GraduationCap,
   LayoutDashboard,
@@ -30,7 +29,7 @@ import { AchievementsPage } from '@/features/achievements/achievements-page'
 import { CalendarPage } from '@/features/calendar/calendar-page'
 import { CoursesPage } from '@/features/courses/courses-page'
 import { DashboardPage } from '@/features/dashboard/dashboard-page'
-import { FocusGardenPage } from '@/features/focus-garden/focus-garden-page'
+import { CelebrationOverlay } from '@/features/celebration/CelebrationOverlay'
 import { GradesPage } from '@/features/grades/grades-page'
 import { InsightsPage } from '@/features/insights/insights-page'
 import { PlannerPage } from '@/features/planner/planner-page'
@@ -44,7 +43,6 @@ import { cn } from '@/lib/utils'
 
 const navigation = [
   { name: 'Dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { name: 'Focus Garden', label: 'Focus Garden', icon: Flower2 },
   { name: 'Timer', label: 'Timer', icon: Clock3 },
   { name: 'Sessions', label: 'Sessions', icon: Gauge },
   { name: 'Courses', label: 'Courses', icon: BookOpen },
@@ -57,11 +55,22 @@ const navigation = [
 ] as const
 
 type NavName = (typeof navigation)[number]['name']
+type EvidenceDeepLinkTarget = {
+  nav: NavName
+  anchorId: string
+}
 
 const navLabels: Record<NavName, string> = Object.fromEntries(navigation.map((item) => [item.name, item.label])) as Record<
   NavName,
   string
 >
+const deepLinkAnchorNavMap: Partial<Record<string, NavName>> = {
+  'dashboard-time-analysis': 'Dashboard',
+  'dashboard-productivity-trend': 'Dashboard',
+  'dashboard-study-heatmap': 'Dashboard',
+  'insights-productivity-trend': 'Insights',
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState<NavName>('Dashboard')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -70,6 +79,7 @@ function App() {
   const [startTimerSignal, setStartTimerSignal] = useState(0)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [timerFullscreenActive, setTimerFullscreenActive] = useState(false)
+  const [pendingEvidenceTarget, setPendingEvidenceTarget] = useState<EvidenceDeepLinkTarget | null>(null)
   const sync = useSessionSync()
   const meQuery = useQuery({
     queryKey: ['me'],
@@ -102,6 +112,21 @@ function App() {
     window.addEventListener('keydown', onEscape)
     return () => window.removeEventListener('keydown', onEscape)
   }, [mobileSidebarOpen])
+
+  useEffect(() => {
+    const syncFromHash = () => {
+      const anchorId = window.location.hash.replace(/^#/, '')
+      if (!anchorId) return
+      const nav = deepLinkAnchorNavMap[anchorId]
+      if (!nav) return
+      setActiveNav(nav)
+      setPendingEvidenceTarget({ nav, anchorId })
+    }
+
+    syncFromHash()
+    window.addEventListener('hashchange', syncFromHash)
+    return () => window.removeEventListener('hashchange', syncFromHash)
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -142,20 +167,20 @@ function App() {
       if (event.altKey) {
         const pageByIndex: Record<string, NavName> = {
           '1': 'Dashboard',
-          '2': 'Focus Garden',
-          '3': 'Timer',
-          '4': 'Sessions',
-          '5': 'Courses',
-          '6': 'Planner',
-          '7': 'Calendar',
-          '8': 'Insights',
-          '9': 'Achievements',
-          '0': 'Settings',
+          '2': 'Timer',
+          '3': 'Sessions',
+          '4': 'Courses',
+          '5': 'Planner',
+          '6': 'Calendar',
+          '7': 'Insights',
+          '8': 'Achievements',
+          '9': 'Settings',
         }
         const targetPage = pageByIndex[event.key]
         if (targetPage) {
           event.preventDefault()
           setActiveNav(targetPage)
+          setPendingEvidenceTarget(null)
           setMobileSidebarOpen(false)
         }
       }
@@ -177,7 +202,6 @@ function App() {
 
   const renderActivePage = () => {
     if (activeNav === 'Settings') return <SettingsPage />
-    if (activeNav === 'Focus Garden') return <FocusGardenPage />
     if (activeNav === 'Sessions') return <SessionsPage openCreateSignal={createSessionSignal} />
     if (activeNav === 'Timer') return <TimerPage startFocusSignal={startTimerSignal} />
     if (activeNav === 'Courses') return <CoursesPage />
@@ -195,12 +219,35 @@ function App() {
     if (activeNav === 'Grades') return <GradesPage />
     if (activeNav === 'Calendar') return <CalendarPage />
     if (activeNav === 'Achievements') return <AchievementsPage />
-    if (activeNav === 'Insights') return <InsightsPage />
-    return <DashboardPage />
+    if (activeNav === 'Insights') {
+      return (
+        <InsightsPage
+          pendingAnchorId={pendingEvidenceTarget?.nav === 'Insights' ? pendingEvidenceTarget.anchorId : null}
+          onPendingAnchorHandled={() =>
+            setPendingEvidenceTarget((current) => (current?.nav === 'Insights' ? null : current))
+          }
+        />
+      )
+    }
+    return (
+      <DashboardPage
+        onDeepLink={(target) => {
+          window.history.replaceState({}, '', `#${target.anchorId}`)
+          setActiveNav(target.nav)
+          setPendingEvidenceTarget(target)
+          setMobileSidebarOpen(false)
+        }}
+        pendingAnchorId={pendingEvidenceTarget?.nav === 'Dashboard' ? pendingEvidenceTarget.anchorId : null}
+        onPendingAnchorHandled={() =>
+          setPendingEvidenceTarget((current) => (current?.nav === 'Dashboard' ? null : current))
+        }
+      />
+    )
   }
 
   return (
     <div className="app-surface min-h-screen bg-background font-sans text-foreground">
+      <CelebrationOverlay />
       {!timerFullscreenActive && mobileSidebarOpen ? (
         <button
           type="button"
@@ -253,6 +300,7 @@ function App() {
                   )}
                   onClick={() => {
                     setActiveNav(item.name)
+                    setPendingEvidenceTarget(null)
                     setMobileSidebarOpen(false)
                   }}
                 >
@@ -291,6 +339,7 @@ function App() {
               <GlobalSearch
                 onNavigate={(target) => {
                   setActiveNav(target)
+                  setPendingEvidenceTarget(null)
                   setMobileSidebarOpen(false)
                 }}
                 onCreateSession={() => {

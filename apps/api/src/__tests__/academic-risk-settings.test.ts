@@ -8,6 +8,7 @@ import {
   normalizeGradeRiskSettings,
   resolveRiskLookbackTerms,
   selectRiskEvaluationItems,
+  shouldNeverFlagBestRiskMetric,
 } from "../grades.js";
 
 test("course with score 95 is never at-risk when score threshold is 70", () => {
@@ -47,33 +48,36 @@ test("previousTerm lookback selects previous term when current term has no grade
   assert.deepEqual(resolved.evaluationTermIds, [1]);
 });
 
-test("academicYear aggregation prefers yearFinal > termFinal > current", () => {
-  const mixed = [
-    { categoryName: "Current", isFinal: 0, finalType: null },
-    { categoryName: "Term grade", isFinal: 1, finalType: "TERM2" },
-    { categoryName: "Term grade", isFinal: 1, finalType: "YEAR" },
-  ];
-  const pickedYear = selectRiskEvaluationItems(mixed, "academicYear", true);
-  assert.equal(pickedYear.source, "yearFinal");
-  assert.equal(pickedYear.items.length, 1);
-
-  const noYear = [
+test("risk evaluation prefers term final when enabled, otherwise uses lookback window grades", () => {
+  const withTermFinal = [
     { categoryName: "Current", isFinal: 0, finalType: null },
     { categoryName: "Term grade", isFinal: 1, finalType: "TERM1" },
+    { categoryName: "Term grade", isFinal: 1, finalType: "YEAR" },
   ];
-  const pickedTerm = selectRiskEvaluationItems(noYear, "academicYear", true);
+  const pickedTerm = selectRiskEvaluationItems(withTermFinal, "academicYear", true);
   assert.equal(pickedTerm.source, "termFinal");
   assert.equal(pickedTerm.items.length, 1);
 
-  const currentOnly = [{ categoryName: "Current", isFinal: 0, finalType: null }];
-  const pickedCurrent = selectRiskEvaluationItems(currentOnly, "academicYear", true);
+  const pickedAllWindowGrades = selectRiskEvaluationItems(withTermFinal, "academicYear", false);
+  assert.equal(pickedAllWindowGrades.source, "current");
+  assert.equal(pickedAllWindowGrades.items.length, 2);
+
+  const currentOnly = [{ categoryName: "Current", isFinal: 0, finalType: null }, { categoryName: "Current", isFinal: 0, finalType: null }];
+  const pickedCurrent = selectRiskEvaluationItems(currentOnly, "academicYear", false);
   assert.equal(pickedCurrent.source, "current");
-  assert.equal(pickedCurrent.items.length, 1);
+  assert.equal(pickedCurrent.items.length, 2);
 });
 
-test("academicYear allows 1 data point when source is year/term final", () => {
+test("risk data points always require configured minimum", () => {
   const settings = normalizeGradeRiskSettings({ riskMinDataPoints: 2 });
-  assert.equal(hasEnoughRiskDataPoints(settings, "academicYear", 1, "yearFinal"), true);
-  assert.equal(hasEnoughRiskDataPoints(settings, "academicYear", 1, "termFinal"), true);
+  assert.equal(hasEnoughRiskDataPoints(settings, "academicYear", 1, "yearFinal"), false);
+  assert.equal(hasEnoughRiskDataPoints(settings, "academicYear", 1, "termFinal"), false);
   assert.equal(hasEnoughRiskDataPoints(settings, "currentTerm", 1, "termFinal"), false);
+  assert.equal(hasEnoughRiskDataPoints(settings, "currentTerm", 2, "current"), true);
+});
+
+test("best-grade metrics are never flagged", () => {
+  assert.equal(shouldNeverFlagBestRiskMetric({ score: 95, grade: 5.2 }), true);
+  assert.equal(shouldNeverFlagBestRiskMetric({ score: 89, grade: 6 }), true);
+  assert.equal(shouldNeverFlagBestRiskMetric({ score: 70, grade: 4.2 }), false);
 });

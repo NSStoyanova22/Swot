@@ -20,7 +20,6 @@ import { cn } from '@/lib/utils'
 
 type SearchTarget =
   | 'Dashboard'
-  | 'Focus Garden'
   | 'Timer'
   | 'Sessions'
   | 'Courses'
@@ -145,7 +144,6 @@ export function GlobalSearch({
   const navigationResults = useMemo<SearchResult[]>(() => {
     const pages: Array<{ title: SearchTarget; subtitle: string }> = [
       { title: 'Dashboard', subtitle: '📊 Overview and metrics' },
-      { title: 'Focus Garden', subtitle: '🌸 Session growth garden' },
       { title: 'Sessions', subtitle: '📝 Study logs' },
       { title: 'Timer', subtitle: '⏱️ Pomodoro and manual timer' },
       { title: 'Courses', subtitle: '📚 Course and activity management' },

@@ -68,21 +68,74 @@ Single-user mode (no authentication yet).
 - Endpoints 🛣️:
   - GET /health
   - GET /me
-  - GET /courses
-  - POST /courses
-  - GET /activities
-  - POST /activities
-  - GET /sessions
-  - POST /sessions
+  - PUT /me/preferences
+  - GET /achievements
+  - GET /streak
+  - GET /productivity
+  - GET /timer/recommendation
   - GET /analytics/insights
   - GET /analytics/prediction
-  - GET /timer/recommendation
+  - GET /analytics/academic-risk
+  - GET /analytics/grades-summary
+  - GET /courses
+  - POST /courses
+  - PUT /courses/:id
+  - DELETE /courses/:id
+  - GET /activities
+  - POST /activities
+  - PUT /activities/:id
+  - DELETE /activities/:id
+  - GET /sessions
+  - POST /sessions
+  - PUT /sessions/:id
+  - GET /sessions/:id/distractions
+  - POST /sessions/:id/distractions
+  - GET /distractions/analytics
+  - GET /terms
+  - POST /terms
+  - PUT /terms/:id
+  - DELETE /terms/:id
+  - GET /grade-categories
+  - POST /grade-categories
+  - PUT /grade-categories/:id
+  - DELETE /grade-categories/:id
+  - GET /grades
+  - POST /grades
+  - PUT /grades/:id
+  - DELETE /grades/:id
+  - POST /grades/bulk
+  - POST /grades/what-if
+  - GET /grades/targets
+  - PUT /grades/targets/:courseId
+  - POST /grades/import-shkolo-pdf
+  - POST /grades/import-photo
+  - GET /recommendations/study-plan
+  - POST /planner/auto-add
+  - GET /planner/blocks
+  - POST /planner/blocks
+  - PUT /planner/blocks/:id
+  - DELETE /planner/blocks/:id
+  - GET /planner/overview
+  - GET /organization/tasks
+  - POST /organization/tasks
+  - PUT /organization/tasks/:id
+  - DELETE /organization/tasks/:id
+  - POST /organization/tasks/:id/subtasks
+  - PUT /organization/tasks/:id/subtasks/:subtaskId
+  - DELETE /organization/tasks/:id/subtasks/:subtaskId
+  - GET /organization/schedule-blocks
+  - POST /organization/schedule-blocks
+  - PUT /organization/schedule-blocks/:id
+  - DELETE /organization/schedule-blocks/:id
+  - GET /organization/reminders
+  - POST /organization/reminders
+  - PUT /organization/reminders/:id
+  - DELETE /organization/reminders/:id
+  - GET /organization/reminders/due
+  - GET /organization/unified
+  - POST /ocr
   - GET /reports/study.pdf
   - GET /calendar.ics
-  - GET /distractions/analytics
-  - POST /grades/import-shkolo-pdf
-  - POST /grades/bulk
-  - PUT /me/preferences (extended with ignored Shkolo subjects)
 
 - Services 🧠:
   - Streak engine with cutoff-aware day boundaries
@@ -109,13 +162,18 @@ Single-user mode (no authentication yet).
 - React Query integration
 - Offline session queue + sync status
 - Grades import preview workflow for Shkolo PDF with editable rows and save mapping
+- Evidence deep-link system (dashboard tile -> evidence section via smooth scroll or cross-page anchor hash)
+- Anchor-highlight pulse animation for deep-linked evidence blocks
 
 ### Product Features ✨
 - Dashboard with analytics tiles, charts, streak heatmap, and prediction card 📊
+- Clickable dashboard tiles that deep-link to evidence sections (same page or Insights page) without extra buttons
+- Evidence-section IDs and temporary pulse highlight on deep-link landing
 - Sessions table + log/edit flow with optimistic updates 📝
 - Pomodoro timer + manual study timer + adaptive duration recommendation ⏱️
 - Focus sounds panel (white noise, rain, cafe, brown noise, optional YouTube lo-fi) 🎧
 - Courses and activities CRUD with color chips 🎓
+- Courses page: right-panel course selector (shadcn Select) synced with left course list and persisted selected course (`swot-selected-course-id`)
 - Calendar monthly view + day details + add/edit sessions 📅
 - Achievements page (earned vs locked states) and medals logic 🏅
 - Insights page with lock state (< 5 sessions) and analytics cards 🔍
@@ -130,6 +188,22 @@ Single-user mode (no authentication yet).
 - Row removal/ignore during import with counters (parsed/removed/skipped/ready) 🧹
 - “Always ignore this subject” support persisted in user preferences and auto-filtered on future imports 🚫
 - Import metadata persisted on created grade items (`importType`, `fileName`, `importedAt`) 🏷️
+
+---
+
+## Recently Updated (March 2026) 🆕
+- Dashboard tile deep-linking:
+  - `Today/Week/Month Minutes` -> `Time Analysis` evidence block
+  - `Productivity` -> `Weekly Productivity Trend` evidence block
+  - `Study Heatmap` -> `Study Heatmap` evidence block
+  - `Tomorrow Prediction` -> Insights recommendations evidence block
+- Cross-page deep-link routing now also writes/reads URL hash anchors and resolves navigation automatically.
+- Deep-linked target cards now animate with a short pulse/ring highlight (~1s).
+- Courses page selector upgrade:
+  - Native select replaced with shadcn-style `Select`
+  - Single source of truth for selected course between left list + right panel selector
+  - LocalStorage persistence for selected course
+  - Empty-state behavior kept when no courses exist
 
 ---
 

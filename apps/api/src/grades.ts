@@ -227,7 +227,7 @@ export function resolveRiskLookbackTerms(
 
 export function selectRiskEvaluationItems(
   items: RiskSelectableGradeItem[],
-  lookback: RiskLookback,
+  _lookback: RiskLookback,
   riskUseTermFinalIfAvailable: boolean,
 ) {
   const normalizeCategory = (value: string | null | undefined) =>
@@ -247,23 +247,15 @@ export function selectRiskEvaluationItems(
   const termFinal = items.filter(
     (item) => !isYearFinal(item) && isTermFinal(item),
   );
-  const current = items.filter(
-    (item) => !isYearFinal(item) && !isTermFinal(item),
-  );
-
-  if (lookback === "academicYear") {
-    if (yearFinal.length) return { source: "yearFinal" as RiskSource, items: yearFinal };
-    if (riskUseTermFinalIfAvailable && termFinal.length) {
-      return { source: "termFinal" as RiskSource, items: termFinal };
-    }
-    return { source: "current" as RiskSource, items: current };
-  }
-
+  const nonYearFinal = items.filter((item) => !isYearFinal(item));
+  const current = nonYearFinal.filter((item) => !isTermFinal(item));
   if (riskUseTermFinalIfAvailable && termFinal.length) {
     return { source: "termFinal" as RiskSource, items: termFinal };
   }
-  if (current.length) return { source: "current" as RiskSource, items: current };
-  return { source: "termFinal" as RiskSource, items: termFinal };
+  return {
+    source: current.length ? ("current" as RiskSource) : ("termFinal" as RiskSource),
+    items: nonYearFinal.length ? nonYearFinal : yearFinal,
+  };
 }
 
 export function isBelowRiskThreshold(
@@ -282,16 +274,17 @@ export function isBelowRiskThreshold(
 
 export function hasEnoughRiskDataPoints(
   settings: GradeRiskSettings,
-  lookback: RiskLookback,
+  _lookback: RiskLookback,
   dataPoints: number,
-  source: RiskSource,
+  _source: RiskSource,
 ) {
-  if (dataPoints >= settings.riskMinDataPoints) return true;
-  return (
-    lookback === "academicYear" &&
-    dataPoints >= 1 &&
-    (source === "yearFinal" || source === "termFinal")
-  );
+  return dataPoints >= settings.riskMinDataPoints;
+}
+
+export function shouldNeverFlagBestRiskMetric(metric: { score: number | null; grade: number | null }) {
+  const score = metric.score ?? null;
+  const grade = metric.grade ?? null;
+  return (score != null && Number.isFinite(score) && score >= 90) || (grade != null && Number.isFinite(grade) && grade >= 6);
 }
 
 export function toPerformanceScore(scale: GradeScale, value: number) {

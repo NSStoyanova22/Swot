@@ -1,4 +1,9 @@
-export type CelebrationType = 'gradeItem' | 'termFinal' | 'courseAverage'
+export type CelebrationType =
+  | 'gradeItem'
+  | 'termFinal'
+  | 'courseAverage'
+  | 'sessionCompleted'
+  | 'streakMilestone'
 
 export type CelebrationPayload = {
   type: CelebrationType

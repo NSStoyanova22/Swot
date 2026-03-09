@@ -6,7 +6,6 @@ import { ensureAchievementsTable, recomputeAndStoreAchievements } from "./achiev
 import { getAnalyticsPrediction } from "./analytics-prediction.js";
 import { prisma } from "./db.js";
 import { ensureDistractionTables, getDistractionAnalytics } from "./distractions.js";
-import { ensureFocusGardenTables } from "./focus-garden.js";
 import {
   getCelebrationSettings,
   setCelebrationSettings,
@@ -49,7 +48,6 @@ await ensurePlannerTables();
 await ensureStudyOrganizationTables();
 await ensurePersonalizationTable();
 await ensureAdaptiveTimerTables();
-await ensureFocusGardenTables();
 await ensureGradesTables();
 
 app.get("/health", async () => ({ ok: true, name: "Swot API" }));

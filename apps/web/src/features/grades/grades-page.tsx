@@ -18,8 +18,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/toast'
 import { GradeChip } from '@/features/grades/GradeChip'
+import { canTriggerCelebrationCooldown, getCelebrationCooldownLastAt, markCelebrationCooldown } from '@/features/celebration/celebration-cooldown'
 import { notifyCelebration } from '@/features/celebration/celebration-events'
-import { CelebrationOverlay } from '@/features/celebration/CelebrationOverlay'
 import { matchExtractedCoursesToUserCourses } from '@/features/grades/course-matching'
 import { parseGradeSheetLine } from '@/features/grades/parse-grade-sheet'
 import { SubjectGradeTable } from '@/features/grades/SubjectGradeTable'
@@ -267,7 +267,6 @@ export function GradesPage() {
     parsedRows: number
     unparsedRows: number
   } | null>(null)
-  const localCelebrationGateRef = useRef<Map<string, number>>(new Map())
 
   const openShkoloCreateCourseDialog = (rowKey: string, initialName: string) => {
     setShkoloCreateCourseRowKey(rowKey)
@@ -585,11 +584,10 @@ export function GradesPage() {
     const cooldownHours = settings?.celebrationCooldownHours ?? 24
     const record = state?.records.find((item) => item.courseId === courseId)
     const persistedAt = record?.lastCelebratedAt ? new Date(record.lastCelebratedAt).getTime() : 0
-    const localAt = localCelebrationGateRef.current.get(courseId) ?? 0
+    const localAt = getCelebrationCooldownLastAt(`course:${courseId}`)
     const lastAt = Math.max(persistedAt, localAt)
     if (!lastAt) return true
-    const diffMs = Date.now() - lastAt
-    return diffMs >= cooldownHours * 60 * 60 * 1000
+    return canTriggerCelebrationCooldown(`course:${courseId}`, cooldownHours)
   }
 
   const triggerCelebration = async (payload: {
@@ -607,7 +605,7 @@ export function GradesPage() {
       ...payload,
       courseName,
     })
-    localCelebrationGateRef.current.set(payload.courseId, Date.now())
+    markCelebrationCooldown(`course:${payload.courseId}`)
     await recordCelebration({
       courseId: payload.courseId,
       score: payload.score,
@@ -994,53 +992,6 @@ export function GradesPage() {
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(['me'], updated)
-    },
-  })
-  const disableCelebrationsMutation = useMutation({
-    mutationFn: async () => {
-      const me = meQuery.data
-      if (!me) throw new Error('Could not load user preferences.')
-      const targetByWeekday = new Map(me.targets.map((item) => [item.weekday, item.targetMinutes]))
-      const payload: UpdatePreferencesDto = {
-        settings: {
-          cutoffTime: me.settings?.cutoffTime ?? '05:00',
-          soundsEnabled: me.settings?.soundsEnabled ?? true,
-          shortSessionMinutes: me.settings?.shortSessionMinutes ?? 10,
-          longSessionMinutes: me.settings?.longSessionMinutes ?? 50,
-          breakSessionMinutes: me.settings?.breakSessionMinutes ?? 25,
-          adaptiveEnabled: me.settings?.adaptiveEnabled ?? true,
-          riskEnabled: me.settings?.riskEnabled ?? true,
-          riskThresholdMode: me.settings?.riskThresholdMode ?? 'score',
-          riskScoreThreshold: me.settings?.riskScoreThreshold ?? 70,
-          riskGradeThresholdByScale: {
-            bulgarian: me.settings?.riskGradeThresholdByScale?.bulgarian ?? 4.5,
-            german: me.settings?.riskGradeThresholdByScale?.german ?? 3.5,
-            percentage: me.settings?.riskGradeThresholdByScale?.percentage ?? 70,
-          },
-          riskLookback: me.settings?.riskLookback ?? 'currentTerm',
-          riskMinDataPoints: me.settings?.riskMinDataPoints ?? 2,
-          riskUseTermFinalIfAvailable: me.settings?.riskUseTermFinalIfAvailable ?? true,
-          riskShowOnlyIfBelowThreshold: me.settings?.riskShowOnlyIfBelowThreshold ?? true,
-          celebrationEnabled: false,
-          celebrationScoreThreshold: me.settings?.celebrationScoreThreshold ?? 90,
-          celebrationCooldownHours: me.settings?.celebrationCooldownHours ?? 24,
-          celebrationShowFor: me.settings?.celebrationShowFor ?? 'all',
-        },
-        targets: weekdays.map((weekday) => ({
-          weekday,
-          targetMinutes: targetByWeekday.get(weekday) ?? 90,
-        })),
-        uiPreferences: me.uiPreferences,
-        ignoredShkoloSubjects: me.ignoredShkoloSubjects ?? [],
-      }
-      return updatePreferences(payload)
-    },
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['me'], updated)
-      toast({
-        variant: 'default',
-        title: 'Celebrations disabled',
-      })
     },
   })
   const shkoloExtractMutation = useMutation({
@@ -1456,10 +1407,7 @@ export function GradesPage() {
   } | null>(null)
   const riskByCourseId = useMemo(() => new Map(academicRisk.map((item) => [item.courseId, item])), [academicRisk])
   const riskSettings = meQuery.data?.settings
-  const needsAttentionItems = useMemo(
-    () => academicRisk.filter((item) => item.riskLevel !== 'low'),
-    [academicRisk],
-  )
+  const needsAttentionItems = useMemo(() => academicRisk, [academicRisk])
   const needsAttentionCaption = useMemo(() => {
     const lookback = riskSettings?.riskLookback ?? 'currentTerm'
     const mode = riskSettings?.riskThresholdMode ?? 'score'
@@ -1471,7 +1419,8 @@ export function GradesPage() {
             riskSettings?.riskGradeThresholdByScale?.[summaryDisplayScale] ??
               (summaryDisplayScale === 'bulgarian' ? 4.5 : summaryDisplayScale === 'german' ? 3.5 : 70),
           )}`
-    return `Based on ${lookback} and threshold ${threshold}.`
+    const preferFinal = riskSettings?.riskUseTermFinalIfAvailable ?? true
+    return `Flagged when below threshold (${threshold}) in ${lookback}. Min ${riskSettings?.riskMinDataPoints ?? 2} grade items. Prefer term final: ${preferFinal ? 'on' : 'off'}.`
   }, [riskSettings, summaryDisplayScale])
 
   useEffect(() => {
@@ -1648,15 +1597,6 @@ export function GradesPage() {
 
   return (
     <PageContainer>
-      <CelebrationOverlay
-        onViewDetails={(payload) => {
-          if (payload.termId && payload.termId !== selectedTermId) {
-            setSelectedTermId(payload.termId)
-          }
-          setSelectedCourseId(payload.courseId)
-        }}
-        onDisable={() => disableCelebrationsMutation.mutate()}
-      />
       <PageHeader
         title={
           <span className="inline-flex items-center gap-2">
@@ -2127,6 +2067,9 @@ export function GradesPage() {
                     <p className="mt-1 text-xs text-muted-foreground">
                       Avg {formatAverageValue(summaryDisplayScale, item.currentAverage)} ({formatScore(item.currentAverageNormalized)} normalized)
                     </p>
+                    {item.reasons[0] ? (
+                      <p className="mt-1 text-xs font-medium text-foreground">{item.reasons[0]}</p>
+                    ) : null}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {item.recommendedMinutes > 0
                         ? `Recommend ${item.recommendedMinutes} min over next 7 days.`

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Circle, Palette, Pencil, Plus, Trash2 } from 'lucide-react'
 
@@ -10,9 +11,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 const activityPalette = ['#ec4899', '#f43f5e', '#fb7185', '#e11d48', '#f97316', '#f59e0b', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6']
+const SELECTED_COURSE_STORAGE_KEY = 'swot-selected-course-id'
+const MAX_VISIBLE_COURSES = 4
 
 function getErrorMessage(error: unknown) {
   if (error instanceof ApiError) {
@@ -55,6 +59,7 @@ export function CoursesPage() {
   const activities = activitiesQuery.data ?? []
 
   const [selectedCourseId, setSelectedCourseId] = useState('')
+  const [isExpanded, setIsExpanded] = useState(false)
   const [newCourseName, setNewCourseName] = useState('')
   const [editingCourseId, setEditingCourseId] = useState<string | null>(null)
   const [editingCourseName, setEditingCourseName] = useState('')
@@ -73,12 +78,40 @@ export function CoursesPage() {
       return
     }
 
-    setSelectedCourseId((current) =>
-      current && courses.some((course) => course.id === current) ? current : courses[0].id,
-    )
+    setSelectedCourseId((current) => {
+      if (current && courses.some((course) => course.id === current)) return current
+      const storedCourseId =
+        typeof window !== 'undefined' ? window.localStorage.getItem(SELECTED_COURSE_STORAGE_KEY) : null
+      if (storedCourseId && courses.some((course) => course.id === storedCourseId)) {
+        return storedCourseId
+      }
+      return courses[0].id
+    })
   }, [courses])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!selectedCourseId) {
+      window.localStorage.removeItem(SELECTED_COURSE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(SELECTED_COURSE_STORAGE_KEY, selectedCourseId)
+  }, [selectedCourseId])
+
   const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null
+  const shouldShowCourseToggle = courses.length > MAX_VISIBLE_COURSES
+  const collapsedVisibleCourses = useMemo(() => {
+    if (!shouldShowCourseToggle) return courses
+    const firstCourses = courses.slice(0, MAX_VISIBLE_COURSES)
+    if (!selectedCourseId || firstCourses.some((course) => course.id === selectedCourseId)) {
+      return firstCourses
+    }
+    const selected = courses.find((course) => course.id === selectedCourseId)
+    if (!selected) return firstCourses
+    return [...courses.slice(0, MAX_VISIBLE_COURSES - 1), selected]
+  }, [courses, selectedCourseId, shouldShowCourseToggle])
+  const visibleCourses = isExpanded ? courses : collapsedVisibleCourses
+  const hiddenCourseCount = Math.max(0, courses.length - collapsedVisibleCourses.length)
   const selectedActivities = useMemo(
     () => activities.filter((activity) => activity.courseId === selectedCourseId),
     [activities, selectedCourseId],
@@ -204,14 +237,15 @@ export function CoursesPage() {
 
           {isLoading ? <p className="text-sm text-muted-foreground">Loading courses...</p> : null}
 
-          <div className="space-y-2">
-            {courses.map((course) => {
+          <motion.div layout className="relative space-y-2">
+            {visibleCourses.map((course) => {
               const courseActivities = activities.filter((activity) => activity.courseId === course.id)
               const isSelected = selectedCourseId === course.id
               const isEditing = editingCourseId === course.id
 
               return (
-                <div
+                <motion.div
+                  layout
                   key={course.id}
                   className={cn(
                     'cursor-pointer rounded-lg border border-border/70 bg-background/75 p-3 transition-colors',
@@ -313,16 +347,31 @@ export function CoursesPage() {
                       <Badge variant="outline">+{courseActivities.length - 3}</Badge>
                     ) : null}
                   </div>
-                </div>
+                </motion.div>
               )
             })}
+
+            {!isExpanded && shouldShowCourseToggle && hiddenCourseCount > 0 ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-card via-card/90 to-transparent" />
+            ) : null}
 
             {courses.length === 0 && !isLoading ? (
               <div className="rounded-lg border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
                 No courses yet. Create your first course to get started.
               </div>
             ) : null}
-          </div>
+          </motion.div>
+
+          {shouldShowCourseToggle ? (
+            <motion.button
+              layout
+              type="button"
+              onClick={() => setIsExpanded((current) => !current)}
+              className="inline-flex items-center rounded-md border border-border/70 bg-background/70 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {isExpanded ? 'Show less' : `See all ${courses.length} courses`}
+            </motion.button>
+          ) : null}
 
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </CardContent>
@@ -337,6 +386,29 @@ export function CoursesPage() {
           <CardDescription>CRUD activities and assign color chips used in views and charts.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {courses.length > 0 ? (
+            <div className="space-y-1">
+              <label htmlFor="activities-course-select" className="text-xs font-medium text-muted-foreground">
+                Course
+              </label>
+              <Select
+                value={selectedCourseId}
+                onValueChange={setSelectedCourseId}
+              >
+                <SelectTrigger id="activities-course-select" aria-label="Select course for activities">
+                  <SelectValue placeholder="Select a course" />
+                </SelectTrigger>
+                <SelectContent>
+                  {courses.map((course) => (
+                    <SelectItem key={course.id} value={course.id}>
+                      {course.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+
           {selectedCourse ? (
             <>
               <div className="rounded-lg border border-border/70 bg-background/75 p-3">
@@ -471,7 +543,7 @@ export function CoursesPage() {
             </>
           ) : (
             <div className="rounded-lg border border-dashed border-border bg-background/70 p-4 text-sm text-muted-foreground">
-              Select or create a course to manage activities.
+              Create your first course to add activities.
             </div>
           )}
           </CardContent>

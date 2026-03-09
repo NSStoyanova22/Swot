@@ -17,10 +17,12 @@ import {
 } from 'lucide-react'
 
 import { getMe, updatePreferences } from '@/api/me'
+import { getSessionSyncState } from '@/api/sessions'
+import { ApiError } from '@/api/client'
 import type { UpdatePreferencesDto } from '@/api/dtos'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/toast'
@@ -29,6 +31,7 @@ import { useHealthQuery } from '@/hooks/use-health-query'
 import { useSessionSync } from '@/hooks/use-session-sync'
 import { useUiPersonalization } from '@/hooks/use-ui-personalization'
 import { type ThemeName, useTheme } from '@/hooks/use-theme'
+import { SettingsCard } from '@/features/settings/settings-card'
 import { generateAccentShades, normalizeHexColor } from '@/theme/accent'
 import { normalizeTheme } from '@/theme/applyTheme'
 
@@ -138,6 +141,9 @@ export function SettingsPage() {
   const [showCalendarLink, setShowCalendarLink] = useState(false)
   const [copied, setCopied] = useState(false)
   const [downloadingReport, setDownloadingReport] = useState(false)
+  const [syncActionPending, setSyncActionPending] = useState(false)
+  const [refreshStatusPending, setRefreshStatusPending] = useState(false)
+  const [showDebug, setShowDebug] = useState(false)
   useUiPersonalization({
     workspaceName: form.uiPreferences?.workspaceName ?? 'Swot',
     avatar: form.uiPreferences?.avatar ?? '✨',
@@ -151,19 +157,44 @@ export function SettingsPage() {
   })
 
   const calendarFeedUrl = useMemo(() => {
-    const base = import.meta.env.VITE_API_URL.endsWith('/')
-      ? import.meta.env.VITE_API_URL.slice(0, -1)
-      : import.meta.env.VITE_API_URL
-    return `${base}/calendar.ics`
+    const apiUrl = import.meta.env.VITE_API_URL as string | undefined
+    if (apiUrl && apiUrl.length > 0) {
+      const base = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl
+      return `${base}/calendar.ics`
+    }
+    if (typeof window !== 'undefined') {
+      return `${window.location.origin}/calendar.ics`
+    }
+    return ''
   }, [])
 
   useEffect(() => {
     if (!meQuery.data) return
     if (!isInitialized) {
-      setForm(createFormFromMe(meQuery.data))
+      const nextForm = createFormFromMe(meQuery.data)
+      setForm(nextForm)
+      if (import.meta.env.DEV && showDebug) {
+        console.debug('[settings] loaded settings object', {
+          meSettings: meQuery.data.settings,
+          targets: meQuery.data.targets,
+          uiPreferences: meQuery.data.uiPreferences,
+          mappedForm: nextForm,
+        })
+      }
       setIsInitialized(true)
     }
-  }, [isInitialized, meQuery.data])
+  }, [isInitialized, meQuery.data, showDebug])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || !showDebug) return
+    if (!isInitialized || !meQuery.data) return
+    console.debug('[settings] loaded settings object', {
+      meSettings: meQuery.data.settings,
+      targets: meQuery.data.targets,
+      uiPreferences: meQuery.data.uiPreferences,
+      mappedForm: form,
+    })
+  }, [isInitialized, meQuery.data, showDebug])
 
   const mutation = useMutation({
     mutationFn: updatePreferences,
@@ -179,55 +210,84 @@ export function SettingsPage() {
         description: 'Your preferences were updated successfully.',
       })
     },
-    onError: () => {
+    onError: (error) => {
+      const message =
+        error instanceof ApiError &&
+        typeof error.details === 'object' &&
+        error.details !== null &&
+        'error' in error.details &&
+        typeof (error.details as { error?: unknown }).error === 'string'
+          ? String((error.details as { error: string }).error)
+          : error instanceof ApiError
+            ? `Request failed (${error.status})`
+            : 'Could not save preferences. Please try again.'
       toast({
         variant: 'error',
         title: 'Save failed',
-        description: 'Could not save preferences. Please try again.',
+        description: message,
       })
     },
   })
 
-  const validationError = useMemo(() => {
+  const fieldErrors = useMemo(() => {
+    const errors: Partial<Record<string, string>> = {}
     const timePattern = /^([01]\d|2[0-3]):([0-5]\d)$/
     if (!timePattern.test(form.settings.cutoffTime)) {
-      return 'Cutoff time must be in HH:MM format.'
+      errors.cutoffTime = 'Use HH:MM format.'
     }
 
-    const durations = [
-      form.settings.shortSessionMinutes,
-      form.settings.breakSessionMinutes,
-      form.settings.longSessionMinutes,
-    ]
-
-    const invalidDuration = durations.some((value) => !Number.isFinite(value) || value <= 0)
-    if (invalidDuration) {
-      return 'Default session durations must be positive minutes.'
+    if (!Number.isFinite(form.settings.shortSessionMinutes) || form.settings.shortSessionMinutes <= 0) {
+      errors.shortSessionMinutes = 'Must be greater than 0.'
+    }
+    if (!Number.isFinite(form.settings.breakSessionMinutes) || form.settings.breakSessionMinutes <= 0) {
+      errors.breakSessionMinutes = 'Must be greater than 0.'
+    }
+    if (!Number.isFinite(form.settings.longSessionMinutes) || form.settings.longSessionMinutes <= 0) {
+      errors.longSessionMinutes = 'Must be greater than 0.'
     }
 
     const invalidTarget = form.targets.some((item) => !Number.isFinite(item.targetMinutes) || item.targetMinutes < 0)
     if (invalidTarget) {
-      return 'Daily targets must be 0 or greater.'
+      errors.targets = 'Daily targets must be 0 or greater.'
     }
 
-    if (!Number.isFinite(form.settings.riskScoreThreshold ?? 0)) {
-      return 'Risk score threshold must be a number.'
+    const riskScore = Number(form.settings.riskScoreThreshold ?? 0)
+    if (!Number.isFinite(riskScore) || riskScore < 0 || riskScore > 100) {
+      errors.riskScoreThreshold = 'Must be between 0 and 100.'
     }
-    if ((form.settings.riskScoreThreshold ?? 0) < 0 || (form.settings.riskScoreThreshold ?? 0) > 100) {
-      return 'Risk score threshold must be between 0 and 100.'
+    const bulgarian = Number(form.settings.riskGradeThresholdByScale?.bulgarian ?? 0)
+    if (!Number.isFinite(bulgarian) || bulgarian < 2 || bulgarian > 6) {
+      errors.riskBulgarian = 'Range: 2 to 6.'
     }
+    const german = Number(form.settings.riskGradeThresholdByScale?.german ?? 0)
+    if (!Number.isFinite(german) || german < 1 || german > 6) {
+      errors.riskGerman = 'Range: 1 to 6.'
+    }
+    const percentage = Number(form.settings.riskGradeThresholdByScale?.percentage ?? 0)
+    if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+      errors.riskPercentage = 'Range: 0 to 100.'
+    }
+
     if (!Number.isFinite(form.settings.riskMinDataPoints ?? 0) || (form.settings.riskMinDataPoints ?? 0) < 1) {
-      return 'Risk minimum data points must be at least 1.'
+      errors.riskMinDataPoints = 'Must be at least 1.'
     }
+
     if (!Number.isFinite(form.settings.celebrationScoreThreshold ?? 0) || (form.settings.celebrationScoreThreshold ?? 0) < 0 || (form.settings.celebrationScoreThreshold ?? 0) > 100) {
-      return 'Celebration score threshold must be between 0 and 100.'
+      errors.celebrationScoreThreshold = 'Must be between 0 and 100.'
     }
     if (!Number.isFinite(form.settings.celebrationCooldownHours ?? 0) || (form.settings.celebrationCooldownHours ?? 0) < 1) {
-      return 'Celebration cooldown must be at least 1 hour.'
+      errors.celebrationCooldownHours = 'Must be at least 1.'
     }
 
-    return null
+    return errors
   }, [form])
+
+  const validationError = useMemo(() => {
+    const firstError = Object.values(fieldErrors).find((value) => Boolean(value))
+    return firstError ?? null
+  }, [fieldErrors])
+
+  const canSave = !validationError && !mutation.isPending
 
   const status = useMemo(() => {
     if (health.isPending) {
@@ -267,6 +327,9 @@ export function SettingsPage() {
 
   const handleSave = () => {
     if (validationError) return
+    if (import.meta.env.DEV && showDebug) {
+      console.debug('[settings] outgoing updatePreferences payload', form)
+    }
     if (form.uiPreferences?.themePreset) {
       setTheme(form.uiPreferences.themePreset as ThemeName)
     }
@@ -274,6 +337,14 @@ export function SettingsPage() {
   }
 
   const handleCopy = async () => {
+    if (!calendarFeedUrl) {
+      toast({
+        variant: 'error',
+        title: 'Link unavailable',
+        description: 'Calendar feed URL could not be generated in this environment.',
+      })
+      return
+    }
     try {
       await navigator.clipboard.writeText(calendarFeedUrl)
       setCopied(true)
@@ -294,9 +365,10 @@ export function SettingsPage() {
   }
 
   const handleDownloadReport = async () => {
-    const base = import.meta.env.VITE_API_URL.endsWith('/')
-      ? import.meta.env.VITE_API_URL.slice(0, -1)
-      : import.meta.env.VITE_API_URL
+    const apiUrl = import.meta.env.VITE_API_URL as string | undefined
+    const base = apiUrl && apiUrl.length > 0
+      ? (apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl)
+      : (typeof window !== 'undefined' ? window.location.origin : '')
     const url = `${base}/reports/study.pdf`
 
     setDownloadingReport(true)
@@ -320,21 +392,66 @@ export function SettingsPage() {
         title: 'Report ready',
         description: 'Study report PDF downloaded successfully.',
       })
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not generate study report right now.'
       toast({
         variant: 'error',
         title: 'Download failed',
-        description: 'Could not generate study report right now.',
+        description: message,
       })
     } finally {
       setDownloadingReport(false)
     }
   }
 
+  const handleSyncNow = async () => {
+    setSyncActionPending(true)
+    try {
+      await sync.syncNow()
+      const latestSyncState = getSessionSyncState()
+      await queryClient.invalidateQueries({ queryKey: ['health'] })
+      toast({
+        variant: 'success',
+        title: 'Sync complete',
+        description: latestSyncState.pendingCount > 0 ? `${latestSyncState.pendingCount} session(s) still queued.` : 'Session queue is up to date.',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not sync queued sessions.'
+      toast({
+        variant: 'error',
+        title: 'Sync failed',
+        description: message,
+      })
+    } finally {
+      setSyncActionPending(false)
+    }
+  }
+
+  const handleRefreshStatus = async () => {
+    setRefreshStatusPending(true)
+    try {
+      await health.refetch()
+      toast({
+        variant: 'success',
+        title: 'Status refreshed',
+        description: 'API health status updated.',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not refresh API status.'
+      toast({
+        variant: 'error',
+        title: 'Refresh failed',
+        description: message,
+      })
+    } finally {
+      setRefreshStatusPending(false)
+    }
+  }
+
   if (meQuery.isPending) {
     return (
-      <section className="grid gap-4 xl:grid-cols-3">
-        <Card className="xl:col-span-2 shadow-soft">
+      <section className="grid gap-4 xl:grid-cols-2">
+        <Card className="shadow-soft">
           <CardHeader>
             <Skeleton className="h-6 w-56" />
             <Skeleton className="h-4 w-72" />
@@ -367,16 +484,30 @@ export function SettingsPage() {
   }
 
   return (
-    <section className="grid gap-4 xl:grid-cols-3">
-      <Card className="xl:col-span-2 shadow-soft">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings2 className="h-4 w-4 text-primary" />
-            ⚙️ Study Preferences
-          </CardTitle>
-          <CardDescription>Configure targets, day cutoff, default duration buttons, and audio behavior.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
+    <section className="grid gap-4 xl:grid-cols-2">
+      <div className="space-y-4">
+        <SettingsCard
+          title={
+            <span className="inline-flex items-center gap-2">
+              <Settings2 className="h-4 w-4 text-primary" />
+              Study Preferences
+            </span>
+          }
+          description="Daily targets, cutoff, sounds, and adaptive pomodoro behavior."
+          footer={
+            <div className="ml-auto flex items-center gap-2">
+              {import.meta.env.DEV ? (
+                <Button variant="outline" onClick={() => setShowDebug((value) => !value)}>
+                  {showDebug ? 'Hide debug' : 'Show debug'}
+                </Button>
+              ) : null}
+              <Button onClick={handleSave} disabled={!canSave}>
+                <Save className="h-4 w-4" />
+                {mutation.isPending ? 'Saving...' : 'Save settings'}
+              </Button>
+            </div>
+          }
+        >
           <div className="space-y-3">
             <h3 className="text-sm font-semibold">Daily Targets (minutes)</h3>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -410,6 +541,7 @@ export function SettingsPage() {
               })}
             </div>
           </div>
+          {fieldErrors.targets ? <p className="text-xs text-destructive">{fieldErrors.targets}</p> : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="space-y-1.5">
@@ -424,6 +556,7 @@ export function SettingsPage() {
                   }))
                 }
               />
+              {fieldErrors.cutoffTime ? <p className="text-xs text-destructive">{fieldErrors.cutoffTime}</p> : null}
               <p className="text-xs text-muted-foreground">Example: 05:00 means the study day starts at 5 AM.</p>
             </label>
 
@@ -450,7 +583,8 @@ export function SettingsPage() {
                 )}
               </button>
             </div>
-            <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+
+            <div className="rounded-lg border border-border/70 bg-background/70 p-3 sm:col-span-2">
               <p className="text-sm font-semibold">Adaptive Pomodoro</p>
               <button
                 type="button"
@@ -481,9 +615,28 @@ export function SettingsPage() {
             </div>
           </div>
 
-          <div className="space-y-3 rounded-lg border border-border/70 bg-background/70 p-3">
+          {validationError ? (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+              <TriangleAlert className="mt-0.5 h-4 w-4" />
+              <p>{validationError}</p>
+            </div>
+          ) : null}
+
+          {mutation.isError ? (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
+              <TriangleAlert className="mt-0.5 h-4 w-4" />
+              <p>Could not save preferences. Please try again.</p>
+            </div>
+          ) : null}
+        </SettingsCard>
+
+        <SettingsCard
+          title="Grades Risk / Needs Attention"
+          description="Configure thresholding and academic risk signal behavior."
+        >
+          <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">Grades Risk / Needs Attention</p>
+              <p className="text-sm font-semibold">Needs attention tracking</p>
               <button
                 type="button"
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-input px-3 text-sm"
@@ -505,6 +658,7 @@ export function SettingsPage() {
                 )}
               </button>
             </div>
+
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Threshold mode</span>
@@ -543,6 +697,7 @@ export function SettingsPage() {
                 </select>
               </label>
             </div>
+
             {(form.settings.riskThresholdMode ?? 'score') === 'score' ? (
               <label className="space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Risk score threshold</span>
@@ -561,6 +716,7 @@ export function SettingsPage() {
                     }))
                   }
                 />
+                {fieldErrors.riskScoreThreshold ? <p className="text-xs text-destructive">{fieldErrors.riskScoreThreshold}</p> : null}
               </label>
             ) : (
               <div className="grid gap-3 sm:grid-cols-3">
@@ -585,6 +741,7 @@ export function SettingsPage() {
                       }))
                     }
                   />
+                  {fieldErrors.riskBulgarian ? <p className="text-xs text-destructive">{fieldErrors.riskBulgarian}</p> : null}
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">German</span>
@@ -607,6 +764,7 @@ export function SettingsPage() {
                       }))
                     }
                   />
+                  {fieldErrors.riskGerman ? <p className="text-xs text-destructive">{fieldErrors.riskGerman}</p> : null}
                 </label>
                 <label className="space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">Percentage</span>
@@ -628,9 +786,11 @@ export function SettingsPage() {
                       }))
                     }
                   />
+                  {fieldErrors.riskPercentage ? <p className="text-xs text-destructive">{fieldErrors.riskPercentage}</p> : null}
                 </label>
               </div>
             )}
+
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Min data points</span>
@@ -648,6 +808,7 @@ export function SettingsPage() {
                     }))
                   }
                 />
+                {fieldErrors.riskMinDataPoints ? <p className="text-xs text-destructive">{fieldErrors.riskMinDataPoints}</p> : null}
               </label>
               <label className="space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Prefer term final</span>
@@ -686,452 +847,453 @@ export function SettingsPage() {
                 </button>
               </label>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Celebrations enabled</span>
-                <button
-                  type="button"
-                  className="inline-flex h-10 items-center justify-center rounded-md border border-input px-3 text-sm"
-                  onClick={() =>
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        celebrationEnabled: !(current.settings.celebrationEnabled ?? true),
-                      },
-                    }))
-                  }
-                >
-                  {(form.settings.celebrationEnabled ?? true) ? 'Yes' : 'No'}
-                </button>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Celebrate for</span>
-                <select
-                  className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-                  value={form.settings.celebrationShowFor ?? 'all'}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        celebrationShowFor: event.target.value as 'gradeItem' | 'termFinal' | 'courseAverage' | 'all',
-                      },
-                    }))
-                  }
-                >
-                  <option value="all">All triggers</option>
-                  <option value="gradeItem">Grade items</option>
-                  <option value="termFinal">Term finals</option>
-                  <option value="courseAverage">Course average crossing</option>
-                </select>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Celebration score threshold</span>
-                <Input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={form.settings.celebrationScoreThreshold ?? 90}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        celebrationScoreThreshold: Number(event.target.value || 0),
-                      },
-                    }))
-                  }
-                />
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Cooldown (hours)</span>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.settings.celebrationCooldownHours ?? 24}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        celebrationCooldownHours: Number(event.target.value || 1),
-                      },
-                    }))
-                  }
-                />
-              </label>
-            </div>
           </div>
+        </SettingsCard>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold">Default Session Duration Buttons</h3>
-              <Button variant="outline" onClick={applyPreset}>Use 10 / 25 / 50</Button>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Button 1 (min)</span>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.settings.shortSessionMinutes}
-                  onChange={(event) => {
-                    const value = Number(event.target.value)
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        shortSessionMinutes: Number.isNaN(value) ? 0 : value,
-                      },
-                    }))
-                  }}
-                />
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Button 2 (min)</span>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.settings.breakSessionMinutes}
-                  onChange={(event) => {
-                    const value = Number(event.target.value)
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        breakSessionMinutes: Number.isNaN(value) ? 0 : value,
-                      },
-                    }))
-                  }}
-                />
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Button 3 (min)</span>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.settings.longSessionMinutes}
-                  onChange={(event) => {
-                    const value = Number(event.target.value)
-                    setForm((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        longSessionMinutes: Number.isNaN(value) ? 0 : value,
-                      },
-                    }))
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-
-          {validationError ? (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
-              <TriangleAlert className="mt-0.5 h-4 w-4" />
-              <p>{validationError}</p>
-            </div>
-          ) : null}
-
-          {mutation.isError ? (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
-              <TriangleAlert className="mt-0.5 h-4 w-4" />
-              <p>Could not save preferences. Please try again.</p>
-            </div>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2">
-            <Button onClick={handleSave} disabled={Boolean(validationError) || mutation.isPending}>
-              <Save className="h-4 w-4" />
-              {mutation.isPending ? 'Saving...' : 'Save settings'}
-            </Button>
-          </div>
-
-          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <p className="text-sm font-semibold">Calendar Feed Export (.ics)</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Subscribe in Google Calendar, Apple Calendar, or Outlook using this link.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setShowCalendarLink(true)}
+        <SettingsCard
+          title="Celebrations"
+          description="Configure when celebration prompts appear and their cooldown behavior."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Celebrations enabled</span>
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-md border border-input px-3 text-sm"
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      celebrationEnabled: !(current.settings.celebrationEnabled ?? true),
+                    },
+                  }))
+                }
               >
-                Generate link
-              </Button>
-              {showCalendarLink ? (
-                <>
-                  <Input value={calendarFeedUrl} readOnly className="min-w-[280px] flex-1" />
-                  <Button variant="secondary" onClick={handleCopy}>
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                    {copied ? 'Copied' : 'Copy URL'}
-                  </Button>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <p className="text-sm font-semibold">Study Report</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Download a full PDF report with totals, streak stats, course breakdown, charts, and recent sessions.
-            </p>
-            <div className="mt-3">
-              <Button onClick={handleDownloadReport} disabled={downloadingReport}>
-                <FileDown className="h-4 w-4" />
-                {downloadingReport ? 'Generating report...' : 'Download Study Report'}
-              </Button>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <div className="flex items-center gap-2">
-              <Palette className="h-4 w-4 text-primary" />
-              <p className="text-sm font-semibold">Theme Engine</p>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">Choose and preview themes. Selection is saved locally.</p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              {themeOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`rounded-lg border p-3 text-left transition ${
-                    theme === option.value
-                      ? 'border-primary/60 bg-primary/10'
-                      : 'border-border/70 bg-background hover:border-primary/30'
-                  }`}
-                  onClick={() => setTheme(option.value as ThemeName)}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="inline-flex items-center gap-2 text-sm font-semibold">
-                      <span className="flex items-center gap-1">
-                        {option.preview.map((color) => (
-                          <span key={color} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-                        ))}
-                      </span>
-                      {option.label}
-                    </p>
-                    {theme === option.value ? <Check className="h-4 w-4 text-primary" /> : null}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{option.description}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <p className="text-sm font-semibold">Personalization Studio</p>
-            <p className="mt-1 text-xs text-muted-foreground">Live preview with accent, avatar, workspace, widget style, and density.</p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Workspace name</span>
-                <Input
-                  value={form.uiPreferences?.workspaceName ?? ''}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        workspaceName: event.target.value,
-                      },
-                    }))
-                  }
-                />
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Avatar</span>
-                <Input
-                  value={form.uiPreferences?.avatar ?? ''}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        avatar: event.target.value.slice(0, 8),
-                      },
-                    }))
-                  }
-                  placeholder="✨"
-                />
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Accent color</span>
-                <Input
-                  type="color"
-                  value={form.uiPreferences?.accentColor ?? '#e11d77'}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        accentColor: event.target.value,
-                      },
-                    }))
-                  }
-                />
-                {accentPreview ? (
-                  <div className="mt-2 space-y-1.5 rounded-md border border-border/70 bg-background/70 p-2">
-                    <p className="text-[11px] font-medium text-muted-foreground">Generated shades preview</p>
-                    <div className="flex items-center gap-1.5">
-                      {Object.entries(accentPreview.preview).map(([key, color]) => (
-                        <span
-                          key={key}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70"
-                          style={{ backgroundColor: color }}
-                          title={`${key}: ${color}`}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Theme preset</span>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={form.uiPreferences?.themePreset ?? 'soft-rose'}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        themePreset: event.target.value as ThemeName,
-                      },
-                    }))
-                  }
-                >
-                  {themeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Widget style</span>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={form.uiPreferences?.widgetStyle ?? 'soft'}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        widgetStyle: event.target.value as 'soft' | 'glass' | 'flat',
-                      },
-                    }))
-                  }
-                >
-                  <option value="soft">Soft</option>
-                  <option value="glass">Glass</option>
-                  <option value="flat">Flat</option>
-                </select>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Layout density</span>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={form.uiPreferences?.layoutDensity ?? 'comfortable'}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      uiPreferences: {
-                        ...current.uiPreferences,
-                        layoutDensity: event.target.value as 'comfortable' | 'compact' | 'cozy',
-                      },
-                    }))
-                  }
-                >
-                  <option value="compact">Compact</option>
-                  <option value="comfortable">Comfortable</option>
-                  <option value="cozy">Cozy</option>
-                </select>
-              </label>
-            </div>
-            <label className="mt-3 block space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Custom dashboard background</span>
+                {(form.settings.celebrationEnabled ?? true) ? 'Yes' : 'No'}
+              </button>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Celebrate for</span>
+              <select
+                className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+                value={form.settings.celebrationShowFor ?? 'all'}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      celebrationShowFor: event.target.value as 'gradeItem' | 'termFinal' | 'courseAverage' | 'all',
+                    },
+                  }))
+                }
+              >
+                <option value="all">All triggers</option>
+                <option value="gradeItem">Grade items</option>
+                <option value="termFinal">Term finals</option>
+                <option value="courseAverage">Course average crossing</option>
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Celebration score threshold</span>
               <Input
-                value={form.uiPreferences?.dashboardBackground ?? ''}
+                type="number"
+                min={0}
+                max={100}
+                value={form.settings.celebrationScoreThreshold ?? 90}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      celebrationScoreThreshold: Number(event.target.value || 0),
+                    },
+                  }))
+                }
+              />
+              {fieldErrors.celebrationScoreThreshold ? <p className="text-xs text-destructive">{fieldErrors.celebrationScoreThreshold}</p> : null}
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Cooldown (hours)</span>
+              <Input
+                type="number"
+                min={1}
+                value={form.settings.celebrationCooldownHours ?? 24}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      celebrationCooldownHours: Number(event.target.value || 1),
+                    },
+                  }))
+                }
+              />
+              {fieldErrors.celebrationCooldownHours ? <p className="text-xs text-destructive">{fieldErrors.celebrationCooldownHours}</p> : null}
+            </label>
+          </div>
+        </SettingsCard>
+
+        <SettingsCard
+          title="Default Session Duration Buttons"
+          description="Configure the three default quick-focus duration buttons."
+          footer={
+            <Button variant="outline" onClick={applyPreset}>Use 10 / 25 / 50</Button>
+          }
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Button 1 (min)</span>
+              <Input
+                type="number"
+                min={1}
+                value={form.settings.shortSessionMinutes}
+                onChange={(event) => {
+                  const value = Number(event.target.value)
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      shortSessionMinutes: Number.isNaN(value) ? 0 : value,
+                    },
+                  }))
+                }}
+              />
+              {fieldErrors.shortSessionMinutes ? <p className="text-xs text-destructive">{fieldErrors.shortSessionMinutes}</p> : null}
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Button 2 (min)</span>
+              <Input
+                type="number"
+                min={1}
+                value={form.settings.breakSessionMinutes}
+                onChange={(event) => {
+                  const value = Number(event.target.value)
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      breakSessionMinutes: Number.isNaN(value) ? 0 : value,
+                    },
+                  }))
+                }}
+              />
+              {fieldErrors.breakSessionMinutes ? <p className="text-xs text-destructive">{fieldErrors.breakSessionMinutes}</p> : null}
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Button 3 (min)</span>
+              <Input
+                type="number"
+                min={1}
+                value={form.settings.longSessionMinutes}
+                onChange={(event) => {
+                  const value = Number(event.target.value)
+                  setForm((current) => ({
+                    ...current,
+                    settings: {
+                      ...current.settings,
+                      longSessionMinutes: Number.isNaN(value) ? 0 : value,
+                    },
+                  }))
+                }}
+              />
+              {fieldErrors.longSessionMinutes ? <p className="text-xs text-destructive">{fieldErrors.longSessionMinutes}</p> : null}
+            </label>
+          </div>
+        </SettingsCard>
+      </div>
+
+      <div className="space-y-4">
+        <SettingsCard
+          title={
+            <span className="inline-flex items-center gap-2">
+              <Palette className="h-4 w-4 text-primary" />
+              Theme Engine
+            </span>
+          }
+          description="Choose and preview themes. Selection is saved locally."
+        >
+          <div className="grid gap-2 sm:grid-cols-2">
+            {themeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`rounded-lg border p-3 text-left transition ${
+                  theme === option.value
+                    ? 'border-primary/60 bg-primary/10'
+                    : 'border-border/70 bg-background hover:border-primary/30'
+                }`}
+                onClick={() => {
+                  setTheme(option.value as ThemeName)
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      themePreset: option.value as ThemeName,
+                    },
+                  }))
+                }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="inline-flex items-center gap-2 text-sm font-semibold">
+                    <span className="flex items-center gap-1">
+                      {option.preview.map((color) => (
+                        <span key={color} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                      ))}
+                    </span>
+                    {option.label}
+                  </p>
+                  {theme === option.value ? <Check className="h-4 w-4 text-primary" /> : null}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{option.description}</p>
+              </button>
+            ))}
+          </div>
+        </SettingsCard>
+
+        <SettingsCard
+          title="Personalization Studio"
+          description="Live preview with accent, avatar, workspace, widget style, and density."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Workspace name</span>
+              <Input
+                value={form.uiPreferences?.workspaceName ?? ''}
                 onChange={(event) =>
                   setForm((current) => ({
                     ...current,
                     uiPreferences: {
                       ...current.uiPreferences,
-                      dashboardBackground: event.target.value,
+                      workspaceName: event.target.value,
                     },
                   }))
                 }
               />
             </label>
-            <div className="mt-3 rounded-lg border border-border/70 p-3" style={{ backgroundImage: form.uiPreferences?.dashboardBackground }}>
-              <p className="text-sm font-semibold">
-                {form.uiPreferences?.avatar} {form.uiPreferences?.workspaceName}
-              </p>
-              <p className="text-xs text-muted-foreground">Live preview of your personal workspace identity.</p>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border/70 bg-background/70 p-3">
-            <p className="text-sm font-semibold">Focus Sounds Defaults</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              This saves your last selected sound for the Timer page.
-            </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Default sound</span>
-                <select
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                  value={soundPrefs.selectedSound}
-                  onChange={(event) =>
-                    updateSoundPrefs({
-                      selectedSound: event.target.value as
-                        | 'white'
-                        | 'rain'
-                        | 'cafe'
-                        | 'brown'
-                        | 'youtube',
-                    })
-                  }
-                >
-                  <option value="white">🤍 White noise</option>
-                  <option value="rain">🌧️ Rain</option>
-                  <option value="cafe">☕ Cafe ambience</option>
-                  <option value="brown">🟤 Brown noise</option>
-                  <option value="youtube">🎧 YouTube lo-fi</option>
-                </select>
-              </label>
-              <label className="space-y-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Default volume</span>
-                <Input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={soundPrefs.volume}
-                  onChange={(event) => updateSoundPrefs({ volume: Number(event.target.value) })}
-                />
-                <p className="text-xs text-muted-foreground">{Math.round(soundPrefs.volume * 100)}%</p>
-              </label>
-            </div>
-            <label className="mt-3 block space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">YouTube embed URL (optional)</span>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Avatar</span>
               <Input
-                value={soundPrefs.youtubeUrl}
-                onChange={(event) => updateSoundPrefs({ youtubeUrl: event.target.value })}
-                placeholder="https://www.youtube.com/embed/jfKfPfyJRdk"
+                value={form.uiPreferences?.avatar ?? ''}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      avatar: event.target.value.slice(0, 8),
+                    },
+                  }))
+                }
+                placeholder="✨"
               />
             </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Accent color</span>
+              <Input
+                type="color"
+                value={form.uiPreferences?.accentColor ?? '#e11d77'}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      accentColor: event.target.value,
+                    },
+                  }))
+                }
+              />
+              {accentPreview ? (
+                <div className="mt-2 space-y-1.5 rounded-md border border-border/70 bg-background/70 p-2">
+                  <p className="text-[11px] font-medium text-muted-foreground">Generated shades preview</p>
+                  <div className="flex items-center gap-1.5">
+                    {Object.entries(accentPreview.preview).map(([key, color]) => (
+                      <span
+                        key={key}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border/70"
+                        style={{ backgroundColor: color }}
+                        title={`${key}: ${color}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Theme preset</span>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={form.uiPreferences?.themePreset ?? 'soft-rose'}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      themePreset: event.target.value as ThemeName,
+                    },
+                  }))
+                }
+              >
+                {themeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Widget style</span>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={form.uiPreferences?.widgetStyle ?? 'soft'}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      widgetStyle: event.target.value as 'soft' | 'glass' | 'flat',
+                    },
+                  }))
+                }
+              >
+                <option value="soft">Soft</option>
+                <option value="glass">Glass</option>
+                <option value="flat">Flat</option>
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Layout density</span>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={form.uiPreferences?.layoutDensity ?? 'comfortable'}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    uiPreferences: {
+                      ...current.uiPreferences,
+                      layoutDensity: event.target.value as 'comfortable' | 'compact' | 'cozy',
+                    },
+                  }))
+                }
+              >
+                <option value="compact">Compact</option>
+                <option value="comfortable">Comfortable</option>
+                <option value="cozy">Cozy</option>
+              </select>
+            </label>
           </div>
-        </CardContent>
-      </Card>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Custom dashboard background</span>
+            <Input
+              value={form.uiPreferences?.dashboardBackground ?? ''}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  uiPreferences: {
+                    ...current.uiPreferences,
+                    dashboardBackground: event.target.value,
+                  },
+                }))
+              }
+            />
+          </label>
+          <div className="rounded-lg border border-border/70 p-3" style={{ backgroundImage: form.uiPreferences?.dashboardBackground }}>
+            <p className="text-sm font-semibold">
+              {form.uiPreferences?.avatar} {form.uiPreferences?.workspaceName}
+            </p>
+            <p className="text-xs text-muted-foreground">Live preview of your personal workspace identity.</p>
+          </div>
+        </SettingsCard>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>API Status</CardTitle>
-          <CardDescription>Connection and sync health for settings persistence.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <SettingsCard
+          title="Focus Sounds Defaults"
+          description="Saves your default sound setup for the Timer page."
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Default sound</span>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={soundPrefs.selectedSound}
+                onChange={(event) =>
+                  updateSoundPrefs({
+                    selectedSound: event.target.value as
+                      | 'white'
+                      | 'rain'
+                      | 'cafe'
+                      | 'brown'
+                      | 'youtube',
+                  })
+                }
+              >
+                <option value="white">🤍 White noise</option>
+                <option value="rain">🌧️ Rain</option>
+                <option value="cafe">☕ Cafe ambience</option>
+                <option value="brown">🟤 Brown noise</option>
+                <option value="youtube">🎧 YouTube lo-fi</option>
+              </select>
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Default volume</span>
+              <Input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={soundPrefs.volume}
+                onChange={(event) => updateSoundPrefs({ volume: Number(event.target.value) })}
+              />
+              <p className="text-xs text-muted-foreground">{Math.round(soundPrefs.volume * 100)}%</p>
+            </label>
+          </div>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-muted-foreground">YouTube embed URL (optional)</span>
+            <Input
+              value={soundPrefs.youtubeUrl}
+              onChange={(event) => updateSoundPrefs({ youtubeUrl: event.target.value })}
+              placeholder="https://www.youtube.com/embed/jfKfPfyJRdk"
+            />
+          </label>
+        </SettingsCard>
+
+        <SettingsCard
+          title="Calendar Feed Export (.ics)"
+          description="Subscribe in Google Calendar, Apple Calendar, or Outlook."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowCalendarLink(true)}
+              disabled={!calendarFeedUrl}
+            >
+              Generate link
+            </Button>
+            {showCalendarLink ? (
+              <>
+                <Input value={calendarFeedUrl} readOnly className="min-w-[280px] flex-1" />
+                <Button variant="secondary" onClick={handleCopy}>
+                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  {copied ? 'Copied' : 'Copy URL'}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </SettingsCard>
+
+        <SettingsCard
+          title="Study Report"
+          description="Download a full PDF report with totals, streak stats, course breakdown, charts, and recent sessions."
+        >
+          <Button onClick={handleDownloadReport} disabled={downloadingReport}>
+            <FileDown className="h-4 w-4" />
+            {downloadingReport ? 'Generating report...' : 'Download Study Report'}
+          </Button>
+        </SettingsCard>
+
+        <SettingsCard
+          title="API Status"
+          description="Connection and sync health for settings persistence."
+          className="xl:sticky xl:top-20"
+        >
           <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/80 p-3">
             <div className="flex items-center gap-2">
               <status.icon className="h-4 w-4 text-primary" />
@@ -1150,14 +1312,16 @@ export function SettingsPage() {
             <Badge variant={sync.pendingCount > 0 ? 'secondary' : 'outline'}>{syncLabel}</Badge>
           </div>
           {sync.lastError ? <p className="text-xs text-muted-foreground">Last sync notice: {sync.lastError}</p> : null}
-          <Button variant="outline" onClick={() => sync.syncNow()} disabled={sync.isSyncing}>
-            {sync.isSyncing ? 'Syncing...' : 'Sync now'}
-          </Button>
-          <Button variant="outline" onClick={() => health.refetch()} disabled={health.isFetching}>
-            {health.isFetching ? 'Refreshing...' : 'Refresh status'}
-          </Button>
-        </CardContent>
-      </Card>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={handleSyncNow} disabled={sync.isSyncing || syncActionPending}>
+              {sync.isSyncing || syncActionPending ? 'Syncing...' : 'Sync now'}
+            </Button>
+            <Button variant="outline" onClick={handleRefreshStatus} disabled={health.isFetching || refreshStatusPending}>
+              {health.isFetching || refreshStatusPending ? 'Refreshing...' : 'Refresh status'}
+            </Button>
+          </div>
+        </SettingsCard>
+      </div>
     </section>
   )
 }

@@ -11,6 +11,7 @@ import { updateOrganizationTask } from '@/api/organization'
 import { createSession } from '@/api/sessions'
 import { getStreakOverview } from '@/api/streak'
 import { getTimerRecommendation } from '@/api/timer'
+import { getProductivityOverview } from '@/api/productivity'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FocusSoundsPanel } from '@/features/timer/focus-sounds-panel'
@@ -26,6 +27,8 @@ import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
 import { useFullscreen } from '@/hooks/use-fullscreen'
 import { useTimerSession } from '@/hooks/use-timer-session'
 import { cn } from '@/lib/utils'
+import { canTriggerCelebrationCooldown, markCelebrationCooldown } from '@/features/celebration/celebration-cooldown'
+import { notifyCelebration } from '@/features/celebration/celebration-events'
 
 type PomodoroMode = 'focus' | 'short' | 'long'
 type TimerKind = 'focus' | 'manual'
@@ -426,6 +429,7 @@ function LogSessionModal({
 }
 
 export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number }) {
+  const queryClient = useQueryClient()
   const fullscreen = useFullscreen()
   const timerSession = useTimerSession()
   const meQuery = useQuery({
@@ -443,6 +447,12 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
   const settings = meQuery.data?.settings
   const recommendation = recommendationQuery.data
+  const celebrationSettings = {
+    enabled: settings?.celebrationEnabled ?? true,
+    threshold: settings?.celebrationScoreThreshold ?? 90,
+    cooldownHours: settings?.celebrationCooldownHours ?? 24,
+    showFor: settings?.celebrationShowFor ?? 'all',
+  }
 
   const baseFocusMinutes = Math.max(1, settings?.shortSessionMinutes ?? 25)
   const adaptiveFocusMinutes =
@@ -452,6 +462,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
   const [focusOverrideEnabled, setFocusOverrideEnabled] = useState(false)
   const [focusOverrideMinutes, setFocusOverrideMinutes] = useState('')
+  const [showWhy, setShowWhy] = useState(false)
 
   const effectiveFocusMinutes = useMemo(() => {
     if (!focusOverrideEnabled) return adaptiveFocusMinutes
@@ -459,6 +470,16 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     if (!Number.isFinite(parsed) || parsed <= 0) return adaptiveFocusMinutes
     return Math.max(5, Math.min(180, Math.round(parsed)))
   }, [adaptiveFocusMinutes, focusOverrideEnabled, focusOverrideMinutes])
+
+  const hasRecommendationExplanation = Boolean(
+    recommendation &&
+      recommendation.explanation &&
+      recommendation.signals &&
+      Number.isFinite(recommendation.baseFocusMinutes) &&
+      Number.isFinite(recommendation.appliedDeltaMinutes),
+  )
+  const fallbackWhyText =
+    'Adaptive recommendation details are temporarily unavailable. Using base focus minutes until more signal data is available.'
 
   const modeDurations = useMemo(
     () => ({
@@ -481,6 +502,13 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
   const [showTaskCelebration, setShowTaskCelebration] = useState(false)
 
   const [logModal, setLogModal] = useState<{ kind: TimerKind; startTime: string; endTime: string } | null>(null)
+
+  const canTriggerTimerCelebration = (scope: string, score: number) => {
+    if (!celebrationSettings.enabled) return false
+    if (celebrationSettings.showFor !== 'all') return false
+    if (!Number.isFinite(score) || score < celebrationSettings.threshold) return false
+    return canTriggerCelebrationCooldown(scope, celebrationSettings.cooldownHours)
+  }
 
   const activeTask = timerSession.activeTaskId
     ? {
@@ -538,7 +566,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
       setFocusSessionsCompleted((current) => current + 1)
       setLogModal({ kind: 'focus', startTime: start.toISOString(), endTime: end.toISOString() })
     }
-  }, [mode, modeSeconds, pomodoroRunning, remainingSeconds, settings?.soundsEnabled])
+  }, [mode, modeSeconds, pomodoroRunning, remainingSeconds, settings?.soundsEnabled, timerSession])
 
   useEffect(() => {
     if (!manualRunning) return
@@ -566,12 +594,19 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
       timerSession.setSessionStartTime(new Date().toISOString())
     }
     setPomodoroRunning(true)
-  }, [startFocusSignal])
+  }, [startFocusSignal, timerSession])
 
   useEffect(() => {
     if (focusOverrideEnabled) return
     setFocusOverrideMinutes(String(adaptiveFocusMinutes))
   }, [adaptiveFocusMinutes, focusOverrideEnabled])
+
+  useEffect(() => {
+    if (!showWhy) return
+    if (hasRecommendationExplanation) return
+    if (!import.meta.env.DEV) return
+    console.warn('[timer] Adaptive recommendation explanation data is missing or incomplete', recommendation)
+  }, [hasRecommendationExplanation, recommendation, showWhy])
 
   const resetPomodoro = () => {
     setPomodoroRunning(false)
@@ -649,6 +684,43 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     }
   }
 
+  const onSessionCelebration = async (kind: TimerKind) => {
+    if (kind !== 'focus') return
+    const productivity = await queryClient.fetchQuery({
+      queryKey: ['productivity'],
+      queryFn: ({ signal }) => getProductivityOverview(signal),
+    })
+    const streak = await queryClient.fetchQuery({
+      queryKey: ['streak'],
+      queryFn: ({ signal }) => getStreakOverview(signal),
+    })
+
+    const productivityScore = productivity.todayScore
+    if (canTriggerTimerCelebration('timer:session-completed', productivityScore)) {
+      notifyCelebration({
+        type: 'sessionCompleted',
+        courseId: activeTask?.courseId ?? 'focus-session',
+        courseName: activeTask?.name ?? 'Focus session',
+        score: productivityScore,
+        message: `${Math.round(productivityScore)}+ productivity score. Session logged.`,
+      })
+      markCelebrationCooldown('timer:session-completed')
+    }
+
+    const streakValue = streak.currentStreak ?? 0
+    const milestoneReached = [3, 7, 14, 30, 60, 100].includes(streakValue)
+    if (milestoneReached && canTriggerTimerCelebration(`timer:streak-${streakValue}`, productivityScore)) {
+      notifyCelebration({
+        type: 'streakMilestone',
+        courseId: activeTask?.courseId ?? 'streak',
+        courseName: 'Study streak',
+        score: productivityScore,
+        message: `Streak milestone reached: ${streakValue} days.`,
+      })
+      markCelebrationCooldown(`timer:streak-${streakValue}`)
+    }
+  }
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -660,7 +732,11 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
       if (event.code === 'Space') {
         event.preventDefault()
-        setPomodoroRunning((current) => !current)
+        if (pomodoroRunning) {
+          setPomodoroRunning(false)
+        } else {
+          startPomodoro()
+        }
       }
       if (event.key.toLowerCase() === 'r') {
         event.preventDefault()
@@ -682,7 +758,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [manualRunning, modeSeconds, toggleFullscreen])
+  }, [manualRunning, pomodoroRunning, startPomodoro, toggleFullscreen])
 
   const modeProgress = modeSeconds > 0 ? (modeSeconds - remainingSeconds) / modeSeconds : 0
   const manualProgress = Math.min(1, manualElapsedSeconds / Math.max(1, modeDurations.focus * 60))
@@ -923,26 +999,22 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
               <div className="rounded-xl border border-border/70 bg-background/65 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold">🧠 Adaptive focus recommendation</p>
-                  <span
-                    className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-                    title={recommendation?.explanation ?? 'No recommendation yet'}
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => setShowWhy(true)}
+                    aria-expanded={showWhy}
+                    aria-controls="adaptive-why-panel"
                   >
                     <Info className="h-3.5 w-3.5" />
                     Why this?
-                  </span>
+                  </button>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Recommended: <span className="font-semibold text-foreground">{adaptiveFocusMinutes} min</span>
                   {recommendation
                     ? ` · Base ${recommendation.baseFocusMinutes} min · Delta ${recommendation.appliedDeltaMinutes >= 0 ? '+' : ''}${recommendation.appliedDeltaMinutes} min`
                     : ''}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {recommendation?.adaptiveEnabled
-                    ? recommendation?.canAdapt
-                      ? recommendation.explanation
-                      : 'Adaptive mode is on, but more sessions are needed before adjustment starts.'
-                    : 'Adaptive mode is off. Enable it in Settings to auto-adjust focus length.'}
                 </p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
@@ -1057,6 +1129,66 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
         </div>
       ) : null}
 
+      <Dialog open={showWhy} onOpenChange={setShowWhy}>
+        <DialogContent id="adaptive-why-panel" className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Why this recommendation?</DialogTitle>
+            <DialogDescription>
+              Adaptive focus duration is based on your recent timer outcomes.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="grid gap-2 rounded-lg border border-border/70 bg-background/70 p-3 sm:grid-cols-3">
+              <p>
+                Recommended:{' '}
+                <span className="font-semibold text-foreground">{adaptiveFocusMinutes} min</span>
+              </p>
+              <p>
+                Base:{' '}
+                <span className="font-semibold text-foreground">{recommendation?.baseFocusMinutes ?? baseFocusMinutes} min</span>
+              </p>
+              <p>
+                Delta:{' '}
+                <span className="font-semibold text-foreground">
+                  {recommendation ? `${recommendation.appliedDeltaMinutes >= 0 ? '+' : ''}${recommendation.appliedDeltaMinutes}` : '+0'} min
+                </span>
+              </p>
+            </div>
+
+            {hasRecommendationExplanation && recommendation ? (
+              <>
+                <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+                  <p className="mb-1 text-xs uppercase tracking-[0.12em] text-muted-foreground">Explanation</p>
+                  <p className="text-muted-foreground">{recommendation.explanation}</p>
+                </div>
+                <div className="rounded-lg border border-border/70 bg-background/70 p-3">
+                  <p className="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Contributing Signals</p>
+                  <ul className="space-y-1 text-muted-foreground">
+                    <li>Recent completion rate: {Math.round(recommendation.signals.completionRatio * 100)}%</li>
+                    <li>Consistency score: {Math.round(recommendation.signals.consistencyScore * 100)}%</li>
+                    <li>Break compliance: {Math.round((1 - recommendation.signals.breakHeavyRatio) * 100)}%</li>
+                    <li>Early cancel ratio: {Math.round(recommendation.signals.earlyCancelRatio * 100)}%</li>
+                    <li>Recent sessions considered: {recommendation.signals.recentSessions}</li>
+                    <li>Baseline sessions considered: {recommendation.signals.previousSessions}</li>
+                    <li>Current streak context: {streak} day{streak === 1 ? '' : 's'}</li>
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-amber-300/40 bg-amber-100/40 p-3 text-muted-foreground">
+                <p>{fallbackWhyText}</p>
+                <p className="mt-1 text-xs">If this persists, save a few sessions and refresh recommendations.</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setShowWhy(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {logModal ? (
         <LogSessionModal
           open={Boolean(logModal)}
@@ -1084,6 +1216,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           requireOutcomeSelection={Boolean(activeTask && logModal.kind === 'focus')}
           onSessionSaved={(outcome) => {
             void onTaskLinkedSessionSaved(outcome)
+            void onSessionCelebration(logModal.kind)
           }}
         />
       ) : null}

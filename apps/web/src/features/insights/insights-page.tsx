@@ -47,8 +47,22 @@ function shortenHourRangeLabel(label: string) {
   return label
 }
 
-export function InsightsPage() {
+function scrollToAnchor(anchorId: string) {
+  const target = document.getElementById(anchorId)
+  if (!target) return false
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return true
+}
+
+export function InsightsPage({
+  pendingAnchorId,
+  onPendingAnchorHandled,
+}: {
+  pendingAnchorId?: string | null
+  onPendingAnchorHandled?: () => void
+}) {
   const [isCompact, setIsCompact] = useState(false)
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null)
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 768px)')
@@ -57,6 +71,15 @@ export function InsightsPage() {
     media.addEventListener('change', onChange)
     return () => media.removeEventListener('change', onChange)
   }, [])
+
+  useEffect(() => {
+    if (!pendingAnchorId) return
+    const didScroll = scrollToAnchor(pendingAnchorId)
+    if (!didScroll) return
+    setHighlightedAnchorId(pendingAnchorId)
+    window.setTimeout(() => setHighlightedAnchorId((current) => (current === pendingAnchorId ? null : current)), 1000)
+    onPendingAnchorHandled?.()
+  }, [onPendingAnchorHandled, pendingAnchorId])
 
   const insightsQuery = useQuery({
     queryKey: ['analytics-insights'],
@@ -209,7 +232,14 @@ export function InsightsPage() {
         </Card>
       </SectionGrid>
 
-      <Card className="shadow-soft">
+      <Card
+        id="insights-productivity-trend"
+        className={cn(
+          'shadow-soft',
+          highlightedAnchorId === 'insights-productivity-trend' &&
+            'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
+        )}
+      >
         <CardHeader>
           <CardTitle>💡 AI-style Recommendations</CardTitle>
           <CardDescription>{insights.explanation}</CardDescription>

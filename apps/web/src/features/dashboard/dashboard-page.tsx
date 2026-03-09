@@ -62,8 +62,8 @@ const fallbackCourseColors = [
   'hsl(var(--chart-5))',
   'hsl(var(--primary))',
 ]
-const dashboardOrderStorageKey = 'swot-dashboard-widget-order-v1'
-const dashboardEnabledStorageKey = 'swot-dashboard-widget-enabled-v1'
+const dashboardOrderStorageKey = 'swot-dashboard-widget-order-v2'
+const dashboardEnabledStorageKey = 'swot-dashboard-widget-enabled-v2'
 
 type WidgetId =
   | 'today'
@@ -89,11 +89,11 @@ const defaultWidgetOrder: WidgetId[] = [
   'prediction',
   'medals',
   'focusInsights',
-  'heatmap',
   'trend',
   'courseChart',
   'timeAnalysis',
   'atRisk',
+  'heatmap',
 ]
 
 const defaultWidgetEnabled: Record<WidgetId, boolean> = {
@@ -137,11 +137,11 @@ const widgetLayoutClass: Record<WidgetId, string> = {
   prediction: 'col-span-1',
   medals: 'col-span-1',
   focusInsights: 'md:col-span-2 xl:col-span-2',
-  heatmap: 'md:col-span-2 xl:col-span-3',
-  trend: 'md:col-span-2 xl:col-span-2',
-  courseChart: 'md:col-span-2 xl:col-span-2',
-  timeAnalysis: 'md:col-span-2 xl:col-span-2',
-  atRisk: 'md:col-span-2 xl:col-span-2',
+  trend: 'md:col-span-1 xl:col-span-2',
+  courseChart: 'md:col-span-1 xl:col-span-2',
+  timeAnalysis: 'md:col-span-1 xl:col-span-2',
+  atRisk: 'md:col-span-1 xl:col-span-2',
+  heatmap: 'md:col-span-2 xl:col-span-5',
 }
 
 function startOfDay(date: Date) {
@@ -253,7 +253,27 @@ function Tile({
   )
 }
 
-export function DashboardPage() {
+type DashboardDeepLinkTarget = {
+  nav: 'Dashboard' | 'Insights'
+  anchorId: string
+}
+
+function scrollToAnchor(anchorId: string) {
+  const target = document.getElementById(anchorId)
+  if (!target) return false
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return true
+}
+
+export function DashboardPage({
+  onDeepLink,
+  pendingAnchorId,
+  onPendingAnchorHandled,
+}: {
+  onDeepLink?: (target: DashboardDeepLinkTarget) => void
+  pendingAnchorId?: string | null
+  onPendingAnchorHandled?: () => void
+}) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [schoolLabel, setSchoolLabel] = useState(schoolLabels[1])
@@ -264,6 +284,7 @@ export function DashboardPage() {
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>(defaultWidgetOrder)
   const [widgetEnabled, setWidgetEnabled] = useState<Record<WidgetId, boolean>>(defaultWidgetEnabled)
   const [layoutDirty, setLayoutDirty] = useState(false)
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<string | null>(null)
 
   useEffect(() => {
     try {
@@ -541,6 +562,41 @@ export function DashboardPage() {
     [widgetEnabled],
   )
 
+  const tileDeepLinks: Partial<Record<WidgetId, DashboardDeepLinkTarget>> = {
+    today: { nav: 'Dashboard', anchorId: 'dashboard-time-analysis' },
+    week: { nav: 'Dashboard', anchorId: 'dashboard-time-analysis' },
+    month: { nav: 'Dashboard', anchorId: 'dashboard-time-analysis' },
+    productivity: { nav: 'Dashboard', anchorId: 'dashboard-productivity-trend' },
+    prediction: { nav: 'Insights', anchorId: 'insights-productivity-trend' },
+    heatmap: { nav: 'Dashboard', anchorId: 'dashboard-study-heatmap' },
+  }
+
+  const activateDeepLink = (widget: WidgetId) => {
+    const target = tileDeepLinks[widget]
+    if (!target) return
+
+    if (target.nav === 'Dashboard') {
+      const didScroll = scrollToAnchor(target.anchorId)
+      if (didScroll) {
+        setHighlightedAnchorId(target.anchorId)
+        window.setTimeout(() => setHighlightedAnchorId((current) => (current === target.anchorId ? null : current)), 1000)
+      }
+      return
+    }
+
+    onDeepLink?.(target)
+  }
+
+  useEffect(() => {
+    if (!pendingAnchorId) return
+    const didScroll = scrollToAnchor(pendingAnchorId)
+    if (didScroll) {
+      setHighlightedAnchorId(pendingAnchorId)
+      window.setTimeout(() => setHighlightedAnchorId((current) => (current === pendingAnchorId ? null : current)), 1000)
+      onPendingAnchorHandled?.()
+    }
+  }, [onPendingAnchorHandled, pendingAnchorId])
+
   const saveLayout = () => {
     window.localStorage.setItem(dashboardOrderStorageKey, JSON.stringify(widgetOrder))
     window.localStorage.setItem(dashboardEnabledStorageKey, JSON.stringify(widgetEnabled))
@@ -713,7 +769,14 @@ export function DashboardPage() {
       </Card>
     ),
     heatmap: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card
+        id="dashboard-study-heatmap"
+        className={cn(
+          'dashboard-widget h-full shadow-soft',
+          highlightedAnchorId === 'dashboard-study-heatmap' &&
+            'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
+        )}
+      >
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -795,7 +858,14 @@ export function DashboardPage() {
       </Card>
     ),
     trend: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card
+        id="dashboard-productivity-trend"
+        className={cn(
+          'dashboard-widget h-full shadow-soft',
+          highlightedAnchorId === 'dashboard-productivity-trend' &&
+            'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
+        )}
+      >
         <CardHeader>
           <CardTitle>📈 Weekly Productivity Trend</CardTitle>
           <CardDescription>
@@ -887,7 +957,14 @@ export function DashboardPage() {
       </Card>
     ),
     timeAnalysis: (
-      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
+      <Card
+        id="dashboard-time-analysis"
+        className={cn(
+          'dashboard-widget h-full min-w-0 shadow-soft',
+          highlightedAnchorId === 'dashboard-time-analysis' &&
+            'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
+        )}
+      >
         <CardHeader>
           <CardTitle>⏰ Time Analysis</CardTitle>
           <CardDescription>Minutes by day of week based on your logged sessions.</CardDescription>
@@ -1052,7 +1129,7 @@ export function DashboardPage() {
         ) : null}
       </Card>
 
-      <SectionGrid className="[grid-auto-flow:dense] gap-6">
+      <SectionGrid className="auto-rows-fr items-stretch gap-6 xl:grid-cols-5 2xl:grid-cols-5">
         {visibleWidgets.map((widget) => (
           <motion.div
             layout
@@ -1060,6 +1137,7 @@ export function DashboardPage() {
             className={cn(
               'relative h-full',
               widgetLayoutClass[widget],
+              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
               customizeMode && 'rounded-xl ring-1 ring-dashed ring-primary/35',
             )}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
@@ -1075,6 +1153,21 @@ export function DashboardPage() {
               }
             }}
             onDragEnd={() => setDraggingWidget(null)}
+            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
+            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            onClick={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              const target = event.target as HTMLElement
+              if (target.closest('button,select,input,textarea,a,[role="button"]')) return
+              activateDeepLink(widget)
+            }}
+            onKeyDown={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                activateDeepLink(widget)
+              }
+            }}
           >
             {customizeMode ? (
               <div className="absolute right-2 top-2 z-20 flex items-center gap-1">

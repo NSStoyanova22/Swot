@@ -7,19 +7,20 @@ import { recomputeAndStoreAchievements } from "./achievements.js";
 import { prisma } from "./db.js";
 import { addDistraction, getSessionDistractions, isDistractionType } from "./distractions.js";
 import {
-  getFocusGardenOverview,
-  upsertFocusGardenGrowthFromSession,
-} from "./focus-garden.js";
-import {
   computeCourseAverage,
   fromPerformanceScore,
   getCelebrationSettings,
   getCourseCelebrationRecords,
   getGradeRiskSettings,
   getGradeBand,
+  hasEnoughRiskDataPoints,
   getIgnoredShkoloSubjects,
+  isBelowRiskThreshold,
   normalizeGradeScale,
   recordCourseCelebration,
+  resolveRiskLookbackTerms,
+  selectRiskEvaluationItems,
+  shouldNeverFlagBestRiskMetric,
   shouldSuppressAttentionForExcellent,
   toPerformanceScore,
   type CelebrationShowFor,
@@ -1832,20 +1833,18 @@ export async function routes(app: FastifyInstance) {
       WHERE user_id = ${USER_ID} AND school_year = ${currentTerm.school_year}
       ORDER BY position ASC, id ASC
     `;
-    const currentIndex = termsInYear.findIndex((item) => item.id === currentTerm.id);
-    const previousTermId = currentIndex > 0 ? termsInYear[currentIndex - 1]?.id ?? null : null;
-    const lookbackReferenceTermId =
-      riskSettings.riskLookback === "previousTerm" && previousTermId != null
-        ? previousTermId
-        : currentTerm.id;
-    const referenceIndex = termsInYear.findIndex((item) => item.id === lookbackReferenceTermId);
-    const trendPreviousTermId =
-      referenceIndex > 0 ? termsInYear[referenceIndex - 1]?.id ?? null : null;
-
-    const evaluationTermIds =
-      riskSettings.riskLookback === "academicYear"
-        ? termsInYear.map((item) => item.id)
-        : [lookbackReferenceTermId];
+    const resolvedLookback = resolveRiskLookbackTerms(
+      termsInYear.map((item) => ({
+        id: item.id,
+        schoolYear: item.school_year,
+        position: item.position,
+      })),
+      currentTerm.id,
+      riskSettings.riskLookback,
+    );
+    const lookbackReferenceTermId = resolvedLookback.referenceTermId;
+    const trendPreviousTermId = resolvedLookback.previousForTrendTermId;
+    const evaluationTermIds = resolvedLookback.evaluationTermIds;
     if (!evaluationTermIds.length) return [];
 
     const toDate = query.to ? new Date(query.to) : new Date();
@@ -1950,45 +1949,7 @@ export async function routes(app: FastifyInstance) {
       return weighted / totalWeight;
     };
 
-    const categoryKey = (value: string | null | undefined) =>
-      (value ?? "").trim().toLocaleLowerCase("bg");
-
     type EvalRow = (typeof evaluationRows)[number];
-    const splitRows = (rows: EvalRow[]) => {
-      const yearFinal = rows.filter((row) => row.final_type === "YEAR");
-      const termFinal = rows.filter((row) => {
-        const category = categoryKey(row.category_name);
-        return (
-          row.final_type === "TERM1" ||
-          row.final_type === "TERM2" ||
-          ((row.is_final ?? 0) === 1 && category === "term grade")
-        );
-      });
-      const current = rows.filter((row) => {
-        if (yearFinal.includes(row) || termFinal.includes(row)) return false;
-        const category = categoryKey(row.category_name);
-        return category === "current" || !category;
-      });
-      return { yearFinal, termFinal, current };
-    };
-
-    const pickEvaluationRows = (rows: EvalRow[]) => {
-      const split = splitRows(rows);
-      if (riskSettings.riskLookback === "academicYear") {
-        if (split.yearFinal.length) return { source: "yearFinal" as const, rows: split.yearFinal };
-        if (riskSettings.riskUseTermFinalIfAvailable && split.termFinal.length) {
-          return { source: "termFinal" as const, rows: split.termFinal };
-        }
-        return { source: "current" as const, rows: split.current };
-      }
-      if (riskSettings.riskUseTermFinalIfAvailable && split.termFinal.length) {
-        return { source: "termFinal" as const, rows: split.termFinal };
-      }
-      return {
-        source: split.current.length ? ("current" as const) : ("termFinal" as const),
-        rows: split.current.length ? split.current : split.termFinal,
-      };
-    };
 
     const rowsByCourse = new Map<string, EvalRow[]>();
     for (const row of evaluationRows) {
@@ -2030,9 +1991,20 @@ export async function routes(app: FastifyInstance) {
         : `${formatScaleValue(riskSettings.riskGradeThresholdByScale[displayScale])}`;
 
     const result = courses.map((course) => {
-      const selected = pickEvaluationRows(rowsByCourse.get(course.id) ?? []);
+      const courseRows = (rowsByCourse.get(course.id) ?? []).map((row) => ({
+        ...row,
+        finalType: row.final_type,
+        isFinal: row.is_final,
+        categoryName: row.category_name,
+      }));
+      const selected = selectRiskEvaluationItems(
+        courseRows,
+        riskSettings.riskLookback,
+        riskSettings.riskUseTermFinalIfAvailable,
+      );
+      const selectedRows = selected.items as Array<EvalRow>;
       const performanceScore = weightedAverageScore(
-        selected.rows.map((row) => ({
+        selectedRows.map((row) => ({
           performance_score: Number(row.performance_score),
           weight: Number(row.weight ?? 1),
         }))
@@ -2042,7 +2014,7 @@ export async function routes(app: FastifyInstance) {
           ? null
           : fromPerformanceScore(displayScale, performanceScore);
       const gradeBand = getGradeBand(displayScale, performanceGrade);
-      const dataPoints = selected.rows.length;
+      const dataPoints = selectedRows.length;
       const deltaFromPrevious = (() => {
         const currentAvg = weightedAverageScore(trendCurrentByCourse.get(course.id) ?? []);
         const previousAvg = weightedAverageScore(trendPreviousByCourse.get(course.id) ?? []);
@@ -2052,19 +2024,21 @@ export async function routes(app: FastifyInstance) {
         return roundScore(currentValue - previousValue);
       })();
 
-      const belowThreshold =
-        riskSettings.riskThresholdMode === "score"
-          ? performanceScore != null &&
-            performanceScore <= riskSettings.riskScoreThreshold
-          : performanceGrade != null &&
-            performanceGrade <=
-              riskSettings.riskGradeThresholdByScale[displayScale];
-      const hasEnoughData =
-        dataPoints >= riskSettings.riskMinDataPoints ||
-        (riskSettings.riskLookback === "academicYear" &&
-          dataPoints >= 1 &&
-          (selected.source === "yearFinal" || selected.source === "termFinal"));
-      const isAtRisk = Boolean(belowThreshold && hasEnoughData);
+      const belowThreshold = isBelowRiskThreshold(riskSettings, displayScale, {
+        score: performanceScore,
+        grade: performanceGrade,
+      });
+      const hasEnoughData = hasEnoughRiskDataPoints(
+        riskSettings,
+        riskSettings.riskLookback,
+        dataPoints,
+        selected.source,
+      );
+      const isBestMetric = shouldNeverFlagBestRiskMetric({
+        score: performanceScore,
+        grade: performanceGrade,
+      });
+      const isAtRisk = Boolean(belowThreshold && hasEnoughData && !isBestMetric);
 
       const studyMinutes = studyByCourse.get(course.id) ?? 0;
       const upcoming = deadlinesByCourse.get(course.id) ?? {
@@ -2075,23 +2049,35 @@ export async function routes(app: FastifyInstance) {
       const suggestedActions: string[] = [];
       let riskPoints = 0;
 
-      if (isAtRisk) {
-        riskPoints += 52;
-        reasons.push(
-          riskSettings.riskThresholdMode === "score"
-            ? `Score ${performanceScore == null ? "-" : roundScore(performanceScore).toFixed(1)} is below threshold ${roundScore(riskSettings.riskScoreThreshold).toFixed(1)}.`
-            : `Avg ${performanceGrade == null ? "-" : formatScaleValue(performanceGrade)} is below threshold ${formatScaleValue(
-                riskSettings.riskGradeThresholdByScale[displayScale],
-              )}.`
-        );
+      if (belowThreshold) {
+        if (riskSettings.riskThresholdMode === "score") {
+          reasons.push(
+            `Score ${performanceScore == null ? "-" : roundScore(performanceScore).toFixed(1)} below threshold ${roundScore(riskSettings.riskScoreThreshold).toFixed(1)}`
+          );
+        } else {
+          reasons.push(
+            `Grade ${performanceGrade == null ? "-" : formatScaleValue(performanceGrade)} below threshold ${formatScaleValue(
+              riskSettings.riskGradeThresholdByScale[displayScale],
+            )}`
+          );
+        }
       }
       if (!hasEnoughData) {
         reasons.push(
-          `Not enough data points (${dataPoints}/${riskSettings.riskMinDataPoints}) for reliable evaluation.`
+          `Only ${dataPoints} data point${dataPoints === 1 ? "" : "s"}, min ${riskSettings.riskMinDataPoints} required`
         );
       }
+      if (isBestMetric) {
+        reasons.push("Best-grade performance (>=90 / 6) is never flagged.");
+      }
+
+      if (isAtRisk) {
+        riskPoints += 52;
+      }
       if (deltaFromPrevious != null && deltaFromPrevious < -1) {
-        riskPoints += clamp(Math.abs(deltaFromPrevious) * 1.5, 6, 24);
+        if (isAtRisk) {
+          riskPoints += clamp(Math.abs(deltaFromPrevious) * 1.5, 6, 24);
+        }
         reasons.push(`Downward trend (${deltaFromPrevious.toFixed(2)}).`);
       }
       if (averageStudy > 0 && isAtRisk) {
@@ -2135,6 +2121,9 @@ export async function routes(app: FastifyInstance) {
       return {
         courseId: course.id,
         courseName: course.name,
+        isBelowThreshold: belowThreshold,
+        hasEnoughData,
+        isAtRisk,
         riskScore,
         riskLevel,
         gradeBand,
@@ -2158,9 +2147,10 @@ export async function routes(app: FastifyInstance) {
       };
     });
 
-    const filtered = riskSettings.riskShowOnlyIfBelowThreshold
-      ? result.filter((item) => item.riskLevel !== "low")
-      : result;
+    const filtered = result.filter((item) =>
+      item.isAtRisk &&
+      (!riskSettings.riskShowOnlyIfBelowThreshold || item.isBelowThreshold)
+    );
     return filtered.sort((a, b) => b.riskScore - a.riskScore);
   });
 
@@ -3788,13 +3778,6 @@ export async function routes(app: FastifyInstance) {
     return unifiedItems;
   });
 
-  app.get("/focus-garden/overview", async (req) => {
-    const query = req.query as { days?: string; timelineLimit?: string };
-    const days = query.days ? Number(query.days) : 90;
-    const timelineLimit = query.timelineLimit ? Number(query.timelineLimit) : 120;
-    return getFocusGardenOverview(USER_ID, days, timelineLimit);
-  });
-
   // Sessions
   app.get("/sessions", async (req) => {
     const q = req.query as {
@@ -3858,11 +3841,6 @@ export async function routes(app: FastifyInstance) {
       include: { course: true, activity: true },
     });
 
-    await upsertFocusGardenGrowthFromSession(USER_ID, {
-      id: created.id,
-      startTime: created.startTime,
-      durationMinutes: created.durationMinutes,
-    });
     await recomputeAndStoreAchievements(USER_ID);
     await recomputeAndStoreStreak(USER_ID);
     await recomputeAndStoreProductivity(USER_ID);
@@ -3946,11 +3924,6 @@ export async function routes(app: FastifyInstance) {
       include: { course: true, activity: true },
     });
 
-    await upsertFocusGardenGrowthFromSession(USER_ID, {
-      id: updated.id,
-      startTime: updated.startTime,
-      durationMinutes: updated.durationMinutes,
-    });
     await recomputeAndStoreAchievements(USER_ID);
     await recomputeAndStoreStreak(USER_ID);
     await recomputeAndStoreProductivity(USER_ID);
