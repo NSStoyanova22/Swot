@@ -69,3 +69,48 @@ Create an `.env` file in `apps/api/`:
 ```env
 PORT=4000
 DATABASE_URL="mysql://root:PASSWORD@localhost:3306/swot_db"
+```
+Create a `.env.local` file in `apps/web/`:
+```env
+VITE_API_URL=http://localhost:4000
+```
+### 4. Database Initialization
+```env
+# Create the DB in MySQL first: CREATE DATABASE swot_db;
+pnpm --filter api exec prisma migrate dev
+pnpm --filter api exec prisma db seed
+```
+### 5. Launch
+```env
+pnpm dev
+```
+> Web: `http://localhost:5173`,
+> API: `http://localhost:4000`
+## 📂 Project Structure
+
+```text
+Swot/
+├─ apps/
+│  ├─ web/       # React + Vite (The UI)
+│  └─ api/       # Fastify + Prisma (The Brains)
+├─ packages/     # Shared configs/types
+└─ package.json
+```
+## 📅 Roadmap
+- [ ] Mobile-responsive layout refinement
+- [ ] Multi-user Authentication (Supabase/Auth.js)
+- [ ] Cloud Deployment guides
+- [ ] Global performance profiling
+
+---
+
+## 🤝 Contributing
+I built this for myself, but I'd love for it to help others too. If you have an idea for a new insight or a better way to track sessions, feel free to fork and submit a PR!
+
+---
+
+## 📝 License
+This project is currently unlicensed, but open to community use.
+
+---
+*Built with ❤️ by a student who just wanted a better way to study.*
