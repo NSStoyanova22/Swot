@@ -141,7 +141,7 @@ const widgetLayoutClass: Record<WidgetId, string> = {
   courseChart: 'md:col-span-1 xl:col-span-2',
   timeAnalysis: 'md:col-span-1 xl:col-span-2',
   atRisk: 'md:col-span-1 xl:col-span-2',
-  heatmap: 'md:col-span-2 xl:col-span-5',
+  heatmap: 'md:col-span-2 xl:col-span-4',
 }
 
 function startOfDay(date: Date) {
@@ -556,6 +556,18 @@ export function DashboardPage({
   const visibleWidgets = useMemo(
     () => widgetOrder.filter((widget) => widgetEnabled[widget]),
     [widgetEnabled, widgetOrder],
+  )
+  const evidenceWidgetSet = useMemo(
+    () => new Set<WidgetId>(['trend', 'courseChart', 'timeAnalysis', 'atRisk', 'heatmap']),
+    [],
+  )
+  const summaryVisibleWidgets = useMemo(
+    () => visibleWidgets.filter((widget) => !evidenceWidgetSet.has(widget)),
+    [evidenceWidgetSet, visibleWidgets],
+  )
+  const evidenceVisibleWidgets = useMemo(
+    () => visibleWidgets.filter((widget) => evidenceWidgetSet.has(widget)),
+    [evidenceWidgetSet, visibleWidgets],
   )
   const hiddenWidgets = useMemo(
     () => defaultWidgetOrder.filter((widget) => !widgetEnabled[widget]),
@@ -1129,13 +1141,14 @@ export function DashboardPage({
         ) : null}
       </Card>
 
-      <SectionGrid className="auto-rows-fr items-stretch gap-6 xl:grid-cols-5 2xl:grid-cols-5">
+      {customizeMode ? (
+      <SectionGrid className="items-start gap-6 xl:grid-cols-4 2xl:grid-cols-4">
         {visibleWidgets.map((widget) => (
           <motion.div
             layout
             key={widget}
             className={cn(
-              'relative h-full',
+              'relative',
               widgetLayoutClass[widget],
               !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
               customizeMode && 'rounded-xl ring-1 ring-dashed ring-primary/35',
@@ -1187,10 +1200,101 @@ export function DashboardPage({
                 </Button>
               </div>
             ) : null}
-            <div className="h-full">{widgetContent[widget]}</div>
+            <div>{widgetContent[widget]}</div>
           </motion.div>
         ))}
       </SectionGrid>
+      ) : (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2 xl:grid-cols-4">
+          {summaryVisibleWidgets.map((widget) => (
+          <motion.div
+            layout
+            key={widget}
+            className={cn(
+              'relative',
+              widget === 'focusInsights' ? 'md:col-span-2 xl:col-span-1' : 'col-span-1',
+              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            )}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            draggable={customizeMode}
+            onDragStart={() => setDraggingWidget(widget)}
+            onDragOver={(event) => {
+              if (customizeMode) event.preventDefault()
+            }}
+            onDrop={() => {
+              if (customizeMode && draggingWidget) {
+                moveWidget(draggingWidget, widget)
+                setDraggingWidget(null)
+              }
+            }}
+            onDragEnd={() => setDraggingWidget(null)}
+            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
+            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            onClick={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              const target = event.target as HTMLElement
+              if (target.closest('button,select,input,textarea,a,[role="button"]')) return
+              activateDeepLink(widget)
+            }}
+            onKeyDown={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                activateDeepLink(widget)
+              }
+            }}
+          >
+            <div>{widgetContent[widget]}</div>
+          </motion.div>
+        ))}
+        </div>
+
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+          {evidenceVisibleWidgets.map((widget) => (
+          <motion.div
+            layout
+            key={widget}
+            className={cn(
+              'relative',
+              widget === 'heatmap' ? 'xl:col-span-2' : 'col-span-1',
+              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+            )}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            draggable={customizeMode}
+            onDragStart={() => setDraggingWidget(widget)}
+            onDragOver={(event) => {
+              if (customizeMode) event.preventDefault()
+            }}
+            onDrop={() => {
+              if (customizeMode && draggingWidget) {
+                moveWidget(draggingWidget, widget)
+                setDraggingWidget(null)
+              }
+            }}
+            onDragEnd={() => setDraggingWidget(null)}
+            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
+            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            onClick={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              const target = event.target as HTMLElement
+              if (target.closest('button,select,input,textarea,a,[role="button"]')) return
+              activateDeepLink(widget)
+            }}
+            onKeyDown={(event) => {
+              if (customizeMode || !tileDeepLinks[widget]) return
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                activateDeepLink(widget)
+              }
+            }}
+          >
+            <div>{widgetContent[widget]}</div>
+          </motion.div>
+        ))}
+        </div>
+      </div>
+      )}
     </PageContainer>
   )
 }
