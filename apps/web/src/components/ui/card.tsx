@@ -3,10 +3,14 @@ import { motion } from 'framer-motion'
 
 import { cn } from '@/lib/utils'
 
-function Card({ className, ...props }: React.ComponentProps<'div'>) {
+type CardProps = React.ComponentProps<'div'> & {
+  hoverEffect?: boolean
+}
+
+function Card({ className, hoverEffect = true, ...props }: CardProps) {
   return (
     <motion.div
-      whileHover={{ y: -3, scale: 1.004, boxShadow: '0 14px 32px rgba(15, 23, 42, 0.12)' }}
+      whileHover={hoverEffect ? { y: -3, scale: 1.004, boxShadow: '0 14px 32px rgba(15, 23, 42, 0.12)' } : undefined}
       transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
     >
       <div

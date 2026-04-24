@@ -229,15 +229,20 @@ function Tile({
   description,
   icon: Icon,
   extra,
+  interactive = false,
 }: {
   title: string
   value: string
   description: string
   icon: ComponentType<{ className?: string }>
   extra?: ReactNode
+  interactive?: boolean
 }) {
   return (
-    <Card className="dashboard-widget flex h-full min-h-[178px] flex-col shadow-soft">
+    <Card
+      hoverEffect={interactive}
+      className={cn('flex h-full min-h-[178px] flex-col shadow-soft', interactive && 'dashboard-widget')}
+    >
       <CardHeader className="pb-3">
         <CardDescription className="flex items-center justify-between">
           {title}
@@ -655,6 +660,7 @@ export function DashboardPage({
         value={formatMinutes(metrics.todayMinutes)}
         description={`Target: ${formatMinutes(todayTarget)}`}
         icon={Timer}
+        interactive={Boolean(tileDeepLinks.today)}
         extra={
           <div className="space-y-1">
             <div className="h-2 rounded-full bg-secondary">
@@ -669,10 +675,22 @@ export function DashboardPage({
       />
     ),
     week: (
-      <Tile title="🗓️ Week Minutes" value={formatMinutes(metrics.weekMinutes)} description="Monday to today" icon={CalendarDays} />
+      <Tile
+        title="🗓️ Week Minutes"
+        value={formatMinutes(metrics.weekMinutes)}
+        description="Monday to today"
+        icon={CalendarDays}
+        interactive={Boolean(tileDeepLinks.week)}
+      />
     ),
     month: (
-      <Tile title="📆 Month Minutes" value={formatMinutes(metrics.monthMinutes)} description="Current month total" icon={Goal} />
+      <Tile
+        title="📆 Month Minutes"
+        value={formatMinutes(metrics.monthMinutes)}
+        description="Current month total"
+        icon={Goal}
+        interactive={Boolean(tileDeepLinks.month)}
+      />
     ),
     streak: (
       <Tile
@@ -688,6 +706,7 @@ export function DashboardPage({
         value={`${productivityQuery.data?.todayScore ?? 0}/100`}
         description={`Weekly avg: ${Math.round(productivityQuery.data?.weeklyAverage ?? 0)}`}
         icon={Goal}
+        interactive={Boolean(tileDeepLinks.productivity)}
         extra={
           <div className="space-y-1">
             <div className="h-2 rounded-full bg-secondary">
@@ -709,6 +728,7 @@ export function DashboardPage({
         value={formatMinutes(predictionQuery.data?.predictedMinutes ?? 0)}
         description={`Study probability: ${Math.round((predictionQuery.data?.studyProbability ?? 0) * 100)}%`}
         icon={Sparkles}
+        interactive={Boolean(tileDeepLinks.prediction)}
         extra={
           <div className="space-y-1">
             <div className="h-2 rounded-full bg-secondary">
@@ -749,7 +769,10 @@ export function DashboardPage({
       />
     ),
     focusInsights: (
-      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
+      <Card
+        hoverEffect={Boolean(tileDeepLinks.focusInsights)}
+        className={cn('h-full min-w-0 shadow-soft', tileDeepLinks.focusInsights && 'dashboard-widget')}
+      >
         <CardHeader>
           <CardTitle>🎯 Focus Insights</CardTitle>
           <CardDescription>
@@ -782,9 +805,11 @@ export function DashboardPage({
     ),
     heatmap: (
       <Card
+        hoverEffect={Boolean(tileDeepLinks.heatmap)}
         id="dashboard-study-heatmap"
         className={cn(
-          'dashboard-widget h-full shadow-soft',
+          'h-full shadow-soft',
+          tileDeepLinks.heatmap && 'dashboard-widget',
           highlightedAnchorId === 'dashboard-study-heatmap' &&
             'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
         )}
@@ -871,9 +896,11 @@ export function DashboardPage({
     ),
     trend: (
       <Card
+        hoverEffect={Boolean(tileDeepLinks.trend)}
         id="dashboard-productivity-trend"
         className={cn(
-          'dashboard-widget h-full shadow-soft',
+          'h-full shadow-soft',
+          tileDeepLinks.trend && 'dashboard-widget',
           highlightedAnchorId === 'dashboard-productivity-trend' &&
             'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
         )}
@@ -937,7 +964,10 @@ export function DashboardPage({
       </Card>
     ),
     courseChart: (
-      <Card className="dashboard-widget h-full min-w-0 shadow-soft">
+      <Card
+        hoverEffect={Boolean(tileDeepLinks.courseChart)}
+        className={cn('h-full min-w-0 shadow-soft', tileDeepLinks.courseChart && 'dashboard-widget')}
+      >
         <CardHeader>
           <CardTitle>📚 Minutes by Course</CardTitle>
           <CardDescription>Distribution of focused time across your subjects.</CardDescription>
@@ -970,9 +1000,11 @@ export function DashboardPage({
     ),
     timeAnalysis: (
       <Card
+        hoverEffect={Boolean(tileDeepLinks.timeAnalysis)}
         id="dashboard-time-analysis"
         className={cn(
-          'dashboard-widget h-full min-w-0 shadow-soft',
+          'h-full min-w-0 shadow-soft',
+          tileDeepLinks.timeAnalysis && 'dashboard-widget',
           highlightedAnchorId === 'dashboard-time-analysis' &&
             'evidence-highlight-pulse ring-2 ring-primary ring-offset-2 ring-offset-background',
         )}
@@ -999,7 +1031,7 @@ export function DashboardPage({
       </Card>
     ),
     atRisk: (
-      <Card className="dashboard-widget h-full shadow-soft">
+      <Card hoverEffect={Boolean(tileDeepLinks.atRisk)} className={cn('h-full shadow-soft', tileDeepLinks.atRisk && 'dashboard-widget')}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-destructive" />
@@ -1094,7 +1126,7 @@ export function DashboardPage({
         )}
       />
 
-      <Card className="shadow-soft">
+      <Card hoverEffect={false} className="shadow-soft">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -1143,14 +1175,18 @@ export function DashboardPage({
 
       {customizeMode ? (
       <SectionGrid className="items-start gap-6 xl:grid-cols-4 2xl:grid-cols-4">
-        {visibleWidgets.map((widget) => (
+        {visibleWidgets.map((widget) => {
+          const isInteractive = Boolean(tileDeepLinks[widget])
+          return (
           <motion.div
             layout
             key={widget}
             className={cn(
               'relative',
               widgetLayoutClass[widget],
-              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              isInteractive &&
+                !customizeMode &&
+                'cursor-pointer transition-transform duration-200 hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
               customizeMode && 'rounded-xl ring-1 ring-dashed ring-primary/35',
             )}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
@@ -1166,16 +1202,16 @@ export function DashboardPage({
               }
             }}
             onDragEnd={() => setDraggingWidget(null)}
-            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
-            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            role={!customizeMode && isInteractive ? 'link' : undefined}
+            tabIndex={!customizeMode && isInteractive ? 0 : -1}
             onClick={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               const target = event.target as HTMLElement
               if (target.closest('button,select,input,textarea,a,[role="button"]')) return
               activateDeepLink(widget)
             }}
             onKeyDown={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 activateDeepLink(widget)
@@ -1202,19 +1238,24 @@ export function DashboardPage({
             ) : null}
             <div>{widgetContent[widget]}</div>
           </motion.div>
-        ))}
+          )
+        })}
       </SectionGrid>
       ) : (
       <div className="space-y-6">
         <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-2 xl:grid-cols-4">
-          {summaryVisibleWidgets.map((widget) => (
+          {summaryVisibleWidgets.map((widget) => {
+          const isInteractive = Boolean(tileDeepLinks[widget])
+          return (
           <motion.div
             layout
             key={widget}
             className={cn(
               'relative',
               widget === 'focusInsights' ? 'md:col-span-2 xl:col-span-1' : 'col-span-1',
-              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              isInteractive &&
+                !customizeMode &&
+                'cursor-pointer transition-transform duration-200 hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             )}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             draggable={customizeMode}
@@ -1229,16 +1270,16 @@ export function DashboardPage({
               }
             }}
             onDragEnd={() => setDraggingWidget(null)}
-            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
-            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            role={!customizeMode && isInteractive ? 'link' : undefined}
+            tabIndex={!customizeMode && isInteractive ? 0 : -1}
             onClick={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               const target = event.target as HTMLElement
               if (target.closest('button,select,input,textarea,a,[role="button"]')) return
               activateDeepLink(widget)
             }}
             onKeyDown={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 activateDeepLink(widget)
@@ -1247,18 +1288,23 @@ export function DashboardPage({
           >
             <div>{widgetContent[widget]}</div>
           </motion.div>
-        ))}
+          )
+        })}
         </div>
 
         <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
-          {evidenceVisibleWidgets.map((widget) => (
+          {evidenceVisibleWidgets.map((widget) => {
+          const isInteractive = Boolean(tileDeepLinks[widget])
+          return (
           <motion.div
             layout
             key={widget}
             className={cn(
               'relative',
               widget === 'heatmap' ? 'xl:col-span-2' : 'col-span-1',
-              !customizeMode && tileDeepLinks[widget] && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+              isInteractive &&
+                !customizeMode &&
+                'cursor-pointer transition-transform duration-200 hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             )}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             draggable={customizeMode}
@@ -1273,16 +1319,16 @@ export function DashboardPage({
               }
             }}
             onDragEnd={() => setDraggingWidget(null)}
-            role={!customizeMode && tileDeepLinks[widget] ? 'link' : undefined}
-            tabIndex={!customizeMode && tileDeepLinks[widget] ? 0 : -1}
+            role={!customizeMode && isInteractive ? 'link' : undefined}
+            tabIndex={!customizeMode && isInteractive ? 0 : -1}
             onClick={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               const target = event.target as HTMLElement
               if (target.closest('button,select,input,textarea,a,[role="button"]')) return
               activateDeepLink(widget)
             }}
             onKeyDown={(event) => {
-              if (customizeMode || !tileDeepLinks[widget]) return
+              if (customizeMode || !isInteractive) return
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
                 activateDeepLink(widget)
@@ -1291,7 +1337,8 @@ export function DashboardPage({
           >
             <div>{widgetContent[widget]}</div>
           </motion.div>
-        ))}
+          )
+        })}
         </div>
       </div>
       )}
