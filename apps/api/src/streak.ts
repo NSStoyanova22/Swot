@@ -80,20 +80,20 @@ export async function ensureStreakTables() {
       longest_streak INT NOT NULL DEFAULT 0,
       missed_days INT NOT NULL DEFAULT 0,
       cutoff_time VARCHAR(5) NOT NULL DEFAULT '05:00',
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS streak_daily_stats (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       study_date DATE NOT NULL,
       actual_minutes INT NOT NULL,
       target_minutes INT NOT NULL,
       met_target TINYINT(1) NOT NULL,
       medal VARCHAR(16) NOT NULL,
-      UNIQUE KEY uniq_user_study_date (user_id, study_date),
+      CONSTRAINT uniq_user_study_date UNIQUE (user_id, study_date),
       INDEX idx_streak_daily_user_date (user_id, study_date)
     )
   `)

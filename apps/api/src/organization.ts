@@ -28,7 +28,7 @@ export function computeNextReminderTrigger(
 export async function ensureStudyOrganizationTables() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS schedule_blocks (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       title VARCHAR(191) NOT NULL,
       note TEXT NULL,
@@ -40,15 +40,15 @@ export async function ensureStudyOrganizationTables() {
       rotation_interval_days INT NULL,
       rotation_offset INT NOT NULL DEFAULT 0,
       is_active TINYINT(1) NOT NULL DEFAULT 1,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_schedule_blocks_user_day (user_id, day_of_week, is_active)
     )
   `);
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS tasks (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       title VARCHAR(191) NOT NULL,
       description TEXT NULL,
@@ -59,8 +59,8 @@ export async function ensureStudyOrganizationTables() {
       due_at DATETIME NULL,
       course_id VARCHAR(191) NULL,
       activity_id VARCHAR(191) NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_tasks_user_due (user_id, due_at),
       INDEX idx_tasks_user_status (user_id, status),
       INDEX idx_tasks_user_kind (user_id, kind)
@@ -69,14 +69,14 @@ export async function ensureStudyOrganizationTables() {
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS task_subtasks (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       task_id BIGINT NOT NULL,
       title VARCHAR(191) NOT NULL,
       done TINYINT(1) NOT NULL DEFAULT 0,
       sort_order INT NOT NULL DEFAULT 0,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_task_subtasks_task (task_id, sort_order),
       INDEX idx_task_subtasks_user (user_id)
     )
@@ -84,7 +84,7 @@ export async function ensureStudyOrganizationTables() {
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS reminders (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       task_id BIGINT NULL,
       schedule_block_id BIGINT NULL,
@@ -94,8 +94,8 @@ export async function ensureStudyOrganizationTables() {
       next_trigger_at DATETIME NULL,
       delivered TINYINT(1) NOT NULL DEFAULT 0,
       last_triggered_at DATETIME NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_reminders_user_next (user_id, next_trigger_at, delivered),
       INDEX idx_reminders_user_remind_at (user_id, remind_at)
     )

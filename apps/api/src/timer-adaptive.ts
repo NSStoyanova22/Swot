@@ -96,14 +96,14 @@ async function getAdaptiveEnabledFromDb(userId: string) {
 export async function ensureAdaptiveTimerTables() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS timer_adaptation_history (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       recommended_focus_minutes INT NOT NULL,
       base_focus_minutes INT NOT NULL,
       applied_delta_minutes INT NOT NULL,
       reason VARCHAR(255) NOT NULL,
       metrics_json TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_timer_adapt_user_created (user_id, created_at)
     )
   `)

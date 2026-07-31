@@ -127,7 +127,7 @@ function buildSummary(today: WorkingDay) {
 export async function ensureProductivityTables() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS productivity_daily_stats (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       study_date DATE NOT NULL,
       score INT NOT NULL,
@@ -142,7 +142,7 @@ export async function ensureProductivityTables() {
       consistency_score INT NOT NULL,
       session_length_score INT NOT NULL,
       break_score INT NOT NULL,
-      UNIQUE KEY uniq_productivity_user_day (user_id, study_date),
+      CONSTRAINT uniq_productivity_user_day UNIQUE (user_id, study_date),
       INDEX idx_productivity_user_day (user_id, study_date)
     )
   `)
@@ -152,7 +152,7 @@ export async function ensureProductivityTables() {
       user_id VARCHAR(191) NOT NULL PRIMARY KEY,
       today_score INT NOT NULL DEFAULT 0,
       weekly_average_score DECIMAL(8,2) NOT NULL DEFAULT 0,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
 }

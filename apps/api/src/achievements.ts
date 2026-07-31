@@ -133,18 +133,16 @@ async function earnAchievement(
 export async function ensureAchievementsTable() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS earned_achievements (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       code VARCHAR(64) NOT NULL,
       level_key VARCHAR(64) NOT NULL DEFAULT '',
-      metadata JSON NULL,
-      earned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_user_code_level (user_id, code, level_key),
-      INDEX idx_achievements_user (user_id)
+      metadata JSONB NULL,
+      earned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT uniq_user_code_level UNIQUE (user_id, code, level_key)
     )
   `)
 }
-
 export async function recomputeAndStoreAchievements(userId: string) {
   const [sessions, targets] = await Promise.all([
     prisma.studySession.findMany({

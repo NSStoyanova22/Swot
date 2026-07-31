@@ -50,8 +50,8 @@ export async function ensurePersonalizationTable() {
       theme_preset VARCHAR(32) NOT NULL DEFAULT 'soft-rose',
       widget_style VARCHAR(32) NOT NULL DEFAULT 'soft',
       layout_density VARCHAR(32) NOT NULL DEFAULT 'comfortable',
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 }

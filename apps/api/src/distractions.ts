@@ -30,13 +30,13 @@ function toLabel(type: DistractionType) {
 export async function ensureDistractionTables() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS session_distractions (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       session_id VARCHAR(191) NOT NULL,
       type VARCHAR(32) NOT NULL,
       minutes_lost INT NOT NULL DEFAULT 0,
       note TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_distractions_user (user_id),
       INDEX idx_distractions_session (session_id)
     )

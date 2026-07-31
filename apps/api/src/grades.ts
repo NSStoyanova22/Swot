@@ -649,38 +649,38 @@ export async function recordCourseCelebration(
 export async function ensureGradesTables() {
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS terms (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       school_year VARCHAR(64) NOT NULL,
       name VARCHAR(64) NOT NULL,
       position INT NOT NULL DEFAULT 1,
       start_date DATE NULL,
       end_date DATE NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_terms_user_year_name (user_id, school_year, name),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT uniq_terms_user_year_name UNIQUE (user_id, school_year, name),
       INDEX idx_terms_user_year_position (user_id, school_year, position)
     )
   `);
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS grade_categories (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       course_id VARCHAR(191) NOT NULL,
       name VARCHAR(64) NOT NULL,
       weight DECIMAL(7,3) NOT NULL DEFAULT 20,
       drop_lowest TINYINT(1) NOT NULL DEFAULT 0,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_grade_categories_user_course_name (user_id, course_id, name),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT uniq_grade_categories_user_course_name UNIQUE (user_id, course_id, name),
       INDEX idx_grade_categories_user_course (user_id, course_id)
     )
   `);
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS grade_items (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       term_id BIGINT NOT NULL,
       course_id VARCHAR(191) NOT NULL,
@@ -694,8 +694,8 @@ export async function ensureGradesTables() {
       graded_on DATE NOT NULL,
       note TEXT NULL,
       import_metadata TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_grades_user_term (user_id, term_id),
       INDEX idx_grades_user_course (user_id, course_id),
       INDEX idx_grades_user_category (user_id, category_id),
@@ -715,7 +715,8 @@ export async function ensureGradesTables() {
   try {
     await prisma.$executeRawUnsafe(`
       ALTER TABLE grade_items
-      ADD INDEX idx_grades_user_category (user_id, category_id)
+      CREATE INDEX IF NOT EXISTS idx_grades_user_category
+ON grades(user_id, category_id); (user_id, category_id)
     `);
   } catch {
     // Index already exists.
@@ -750,15 +751,15 @@ export async function ensureGradesTables() {
 
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS course_grade_targets (
-      id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       user_id VARCHAR(191) NOT NULL,
       course_id VARCHAR(191) NOT NULL,
       target_score DECIMAL(7,3) NOT NULL,
       scale VARCHAR(24) NOT NULL,
       target_value DECIMAL(7,3) NOT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_grade_target_user_course (user_id, course_id),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT uniq_grade_target_user_course UNIQUE (user_id, course_id),
       INDEX idx_grade_target_user_course (user_id, course_id)
     )
   `);
@@ -767,8 +768,8 @@ export async function ensureGradesTables() {
     CREATE TABLE IF NOT EXISTS user_grade_import_preferences (
       user_id VARCHAR(191) NOT NULL PRIMARY KEY,
       ignored_shkolo_subjects TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -776,8 +777,8 @@ export async function ensureGradesTables() {
     CREATE TABLE IF NOT EXISTS user_grade_risk_preferences (
       user_id VARCHAR(191) NOT NULL PRIMARY KEY,
       config_json TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -785,8 +786,8 @@ export async function ensureGradesTables() {
     CREATE TABLE IF NOT EXISTS user_celebration_preferences (
       user_id VARCHAR(191) NOT NULL PRIMARY KEY,
       config_json TEXT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -797,8 +798,8 @@ export async function ensureGradesTables() {
       last_celebrated_at DATETIME NOT NULL,
       last_celebrated_score DECIMAL(7,3) NULL,
       last_celebrated_type VARCHAR(32) NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, course_id),
       INDEX idx_course_celebrations_user_date (user_id, last_celebrated_at)
     )
