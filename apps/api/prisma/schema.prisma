@@ -105,7 +105,7 @@ model GradeCategory {
 model CourseGradeTarget {
   id          String   @id @default(cuid())
   userId      String
-  courseId    String
+  courseId    String   @unique
   targetScore Float
   scale       String
   targetValue Float
