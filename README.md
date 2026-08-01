@@ -1,135 +1,176 @@
-# 🧠 SWOT: Study With Objective Tracking
+# 🧠 SWOT: An analytics-driven study planner and productivity tracker
 
 [![Monorepo](https://img.shields.io/badge/Monorepo-pnpm-0f766e?style=for-the-badge)](https://pnpm.io/)
-[![Frontend](https://img.shields.io/badge/Web-React%20%2B%20TS-2563eb?style=for-the-badge)](https://react.dev/)
+[![Frontend](https://img.shields.io/badge/Web-React%20%2B%20TypeScript-2563eb?style=for-the-badge)](https://react.dev/)
 [![Backend](https://img.shields.io/badge/API-Fastify%20%2B%20Prisma-7c3aed?style=for-the-badge)](https://fastify.dev/)
-[![Database](https://img.shields.io/badge/Database-MySQL-0ea5e9?style=for-the-badge)](https://www.mysql.com/)
+[![Database](https://img.shields.io/badge/Database-Neon%2FPostgreSQL-336791?style=for-the-badge)](https://neon.tech/)
 
-> **"If you can’t measure it, you can’t improve it."**
+> If you can’t measure it, you can’t improve it.
 
-I built **SWOT** because I was sick and tired of study trackers that were either locked behind a paywall or lacked the actual "brains" to help me improve. Most apps just tell you *when* you studied; SWOT tells you *how* you're doing and predicts where you're headed.
+SWOT is a study planner built to do more than count hours. It tracks sessions, grades, tasks, and focus habits so students can see how they study, where they struggle, and what to do next.
 
-The name **SWOT** is a nod to the classic strategic planning technique, repurposed for students:
-* **Strengths**: Identify where your focus and productivity are highest.
-* **Weaknesses**: Spot academic risks before they become failing grades.
-* **Opportunities**: Get adaptive Pomodoro suggestions based on your actual performance.
-* **Threats**: Track distractions and see exactly what’s stealing your time.
+The name SWOT is a nod to strategic planning:
 
----
+* **Strengths**: see where focus and productivity are highest.
+* **Weaknesses**: detect academic risk before it becomes a problem.
+* **Opportunities**: adapt study sessions from real usage patterns.
+* **Threats**: track distractions and identify time sinks.
 
-## ✨ Why SWOT? (Key Features)
+## What makes SWOT different?
 
-* **📊 Advanced Analytics**: Not just bar charts. Get productivity scores, streak heatmaps, and academic risk assessments.
-* **🤖 Smart Insights**: A deterministic engine that provides AI-style recommendations and study habit predictions.
-* **⏱️ Adaptive Timer**: A Pomodoro system that suggests durations based on your recent focus levels.
-* **📑 Shkolo Integration**: Built-in PDF parser for Bulgarian students to import grades instantly (with OCR fallback).
-* **🎯 Deep-Linking**: Dashboard tiles aren't just for show—click a metric to jump directly to the evidence and raw data.
-* **🎧 Focus Mode**: Built-in noise generator (Rain, Cafe, White Noise) and Lo-Fi integration.
-* **📅 Full Organization**: Integrated calendar, task management with subtasks, and iCal/PDF exports.
-* **⚡️ Personalisation**: Change of theme, Study Preferences, Accent colour, Grade risk and many more. 
+Unlike a traditional Pomodoro timer, SWOT combines:
+
+* Productivity scoring
+* Academic risk detection
+* Adaptive study sessions
+* Grade analysis
+* Distraction tracking
+* Personalized study recommendations
+
+The goal is not just to measure study time, but to help students understand how they study and where they can improve.
+
+## Key Features
+
+* **Productivity analytics** with streaks, summaries, and focus trends.
+* **Academic risk detection** based on grade patterns and course performance.
+* **Rule-based recommendation engine** that adapts study suggestions from historical study data.
+* **Adaptive timer** that suggests session lengths from recent focus levels.
+* **Shkolo PDF import** with OCR fallback for Bulgarian grade exports.
+* **Focus mode** with noise generation and embedded Lo-Fi integration.
+* **Task and calendar tools** with subtasks, reminders, and export support.
+* **Personalisation** for theme, study preferences, accent colour, and risk thresholds.
+
+## Screenshots
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/0d3275b5-6425-4d8c-9ed5-72169f33b968" width="40%" alt="Dashboard" />
   <img src="https://github.com/user-attachments/assets/fee9fa5d-17f4-4268-ba72-25079e3e9fba" width="40%" alt="Planner" />
 </p>
 
-
-
-
----
-
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Frontend
-- **Framework**: React + TypeScript (Vite)
-- **Styling**: TailwindCSS + shadcn/ui
-- **Animation**: Framer Motion
-- **State/Data**: TanStack React Query
+
+* React + TypeScript
+* Vite
+* TailwindCSS + shadcn/ui
+* Framer Motion
+* TanStack React Query
 
 ### Backend
-- **Runtime**: Node.js + Fastify
-- **ORM**: Prisma
-- **Database**: MySQL
-- **Services**: Tesseract.js (OCR), PDF-Lib (Reporting)
 
----
+* Node.js + Fastify
+* Prisma ORM
+* PostgreSQL on Neon
+* Tesseract.js for OCR
+* PDF-Lib and pdf-parse for document handling
 
-## 🚀 Getting Started
+## Architecture
 
-SWOT is currently **local-first**. You run the brain and the beauty on your own machine.
+```text
+React (Vite)
+      |
+      v
+Fastify API
+      |
+      v
+Prisma ORM
+      |
+      v
+Neon PostgreSQL
+```
 
-### 1. Prerequisites
-* Node.js (LTS)
-* pnpm (`npm install -g pnpm`)
-* MySQL Server
+## Local Development
 
-### 2. Installation
+SWOT can be run locally for development using the instructions below.
+
+### Prerequisites
+
+* Node.js LTS
+* pnpm
+* Access to a PostgreSQL database, such as Neon
+
+### Installation
+
 ```bash
-# Clone the repo
-git clone [https://github.com/your-username/swot.git](https://github.com/your-username/swot.git)
-cd swot
-
-# Install dependencies
+git clone https://github.com/NSStoyanova22/Swot.git
+cd Swot
 pnpm install
 ```
-### 3. Environment Setup
 
-Create an `.env` file in `apps/api/`:
+### Environment Setup
+
+Create `apps/api/.env`:
+
 ```env
 PORT=4000
-DATABASE_URL="mysql://root:PASSWORD@localhost:3306/swot_db"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/swot"
 ```
-Create a `.env.local` file in `apps/web/`:
+
+Create `apps/web/.env.local`:
+
 ```env
 VITE_API_URL=http://localhost:4000
 ```
-### 4. Database Initialization
-```env
-# Create the DB in MySQL first: CREATE DATABASE swot_db;
+
+### Database Setup
+
+With Prisma + Neon, you do not create the database manually. Run the migrations and seed data instead:
+
+```bash
 pnpm --filter api exec prisma migrate dev
 pnpm --filter api exec prisma db seed
 ```
-### 5. Launch
-```env
+
+### Start the App
+
+```bash
 pnpm dev
 ```
-> Web: `http://localhost:5173`,
-> API: `http://localhost:4000`
-## 📂 Project Structure
+
+Web: `http://localhost:5173`
+
+API: `http://localhost:4000`
+
+## ☁️ Deployment
+
+* Frontend: Vercel
+* Backend: Render
+* Database: Neon PostgreSQL
+
+## Project Structure
 
 ```text
 Swot/
 ├─ apps/
-│  ├─ web/       # React + Vite (The UI)
-│  └─ api/       # Fastify + Prisma (The Brains)
+│  ├─ web/       # React + Vite UI
+│  └─ api/       # Fastify + Prisma API
 ├─ packages/     # Shared configs/types
 └─ package.json
 ```
-## 📅 Roadmap
-- [ ] Mobile-responsive layout refinement
-- [ ] Multi-user Authentication (Supabase/Auth.js)
-- [ ] Cloud Deployment guides
-- [ ] Global performance profiling
 
----
+## Roadmap
 
-## 🤝 Contributing
-I built this for myself, but I'd love for it to help others too. If you have an idea for a new insight or a better way to track sessions, feel free to fork and submit a PR!
+* [ ] Authentication and multiple accounts
+* [ ] Real-time sync
+* [ ] Mobile PWA
+* [ ] Calendar integrations
+* [ ] Native mobile app
 
----
-## 👤 About Me
+## Contributing
 
-I'm a student developer who believes that tools for growth should be accessible and data-driven. I built **SWOT** to bridge the gap between simple timers and complex academic management.
+I built this for myself, but I’d love for it to help others too. If you have an idea for a new insight or a better way to track sessions, feel free to fork and submit a PR.
+
+## About Me
+
+I’m a student developer who believes tools for growth should be accessible and data-driven. I built SWOT to bridge the gap between simple timers and more complete academic planning.
 
 * **GitHub**: [NSStoyanova22](https://github.com/NSStoyanova22)
 * **LinkedIn**: [Nikol Stoyanova](https://www.linkedin.com/in/nikol-stoyanova-077b912b2/)
 
+## License
 
----
-
-## ⚖️ License
-
-This project is licensed under the **MIT License**. 
+This project is licensed under the **MIT License**.
 
 Copyright (c) 2026 [Nikol Stoyanova]
 
@@ -137,7 +178,4 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
----
-*Built with ❤️ by a student who just wanted a better way to study.*
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
