@@ -93,18 +93,9 @@ export async function ensureStreakTables() {
       target_minutes INT NOT NULL,
       met_target BOOLEAN NOT NULL,
       medal VARCHAR(16) NOT NULL,
-      UNIQUE(user_id, study_date)
+      UNIQUE(user_id)
     )
   `)
-
-  try {
-    await prisma.$executeRawUnsafe(`
-      ALTER TABLE streak_daily_stats
-      DROP CONSTRAINT IF EXISTS streak_daily_stats_user_id_key
-    `)
-  } catch {
-    // Older databases may have a differently named unique index; ignore if absent.
-  }
 
   await prisma.$executeRawUnsafe(`
     CREATE INDEX IF NOT EXISTS idx_streak_daily_user_date
@@ -200,7 +191,7 @@ export async function recomputeAndStoreStreak(userId: string) {
     for (const row of rows) {
       await tx.$executeRaw`
         INSERT INTO streak_daily_stats (user_id, study_date, actual_minutes, target_minutes, met_target, medal)
-        VALUES (${userId}, CAST(${row.dateKey} AS DATE), ${Math.round(row.actualMinutes)}, ${Math.round(row.targetMinutes)}, ${row.metTarget}, ${row.medal})
+        VALUES (${userId}, ${row.dateKey}, ${Math.round(row.actualMinutes)}, ${Math.round(row.targetMinutes)}, ${row.metTarget ? 1 : 0}, ${row.medal})
       `
     }
 

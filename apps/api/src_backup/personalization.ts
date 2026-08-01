@@ -119,13 +119,13 @@ export async function upsertUiPreferences(
       ${next.layoutDensity}
     )
     ON CONFLICT (user_id) DO UPDATE SET
-      workspace_name = EXCLUDED.workspace_name,
-      avatar = EXCLUDED.avatar,
-      accent_color = EXCLUDED.accent_color,
-      dashboard_background = EXCLUDED.dashboard_background,
-      theme_preset = EXCLUDED.theme_preset,
-      widget_style = EXCLUDED.widget_style,
-      layout_density = EXCLUDED.layout_density
+      workspace_name = VALUES(workspace_name),
+      avatar = VALUES(avatar),
+      accent_color = VALUES(accent_color),
+      dashboard_background = VALUES(dashboard_background),
+      theme_preset = VALUES(theme_preset),
+      widget_style = VALUES(widget_style),
+      layout_density = VALUES(layout_density)
   `;
 
   return getUiPreferences(userId);

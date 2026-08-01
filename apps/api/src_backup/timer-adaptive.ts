@@ -86,8 +86,8 @@ function fromDbBool(value: unknown, fallback = true) {
 async function getAdaptiveEnabledFromDb(userId: string) {
   const rows = await prisma.$queryRaw<Array<{ adaptive_enabled: number | bigint | null }>>`
     SELECT adaptive_enabled
-    FROM "Settings"
-    WHERE "userId" = ${userId}
+    FROM Settings
+    WHERE userId = ${userId}
     LIMIT 1
   `
   return fromDbBool(rows[0]?.adaptive_enabled, true)
@@ -103,31 +103,32 @@ export async function ensureAdaptiveTimerTables() {
       applied_delta_minutes INT NOT NULL,
       reason VARCHAR(255) NOT NULL,
       metrics_json TEXT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_timer_adapt_user_created (user_id, created_at)
     )
   `)
 
   const columnRows = await prisma.$queryRaw<Array<{ count: number | bigint }>>`
     SELECT COUNT(*) AS count
-    FROM information_schema.columns
-    WHERE table_schema = current_schema()
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'Settings'
       AND COLUMN_NAME = 'adaptive_enabled'
   `
   const hasColumn = Number(columnRows[0]?.count ?? 0) > 0
   if (!hasColumn) {
     await prisma.$executeRawUnsafe(`
-      ALTER TABLE "Settings"
-      ADD COLUMN adaptive_enabled BOOLEAN NOT NULL DEFAULT true
+      ALTER TABLE Settings
+      ADD COLUMN adaptive_enabled TINYINT(1) NOT NULL DEFAULT 1
     `)
   }
 }
 
 export async function setAdaptiveEnabled(userId: string, enabled: boolean) {
   await prisma.$executeRaw`
-    UPDATE "Settings"
-    SET adaptive_enabled = ${enabled}
-    WHERE "userId" = ${userId}
+    UPDATE Settings
+    SET adaptive_enabled = ${enabled ? 1 : 0}
+    WHERE userId = ${userId}
   `
 }
 

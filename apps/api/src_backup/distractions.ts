@@ -36,7 +36,9 @@ export async function ensureDistractionTables() {
       type VARCHAR(32) NOT NULL,
       minutes_lost INT NOT NULL DEFAULT 0,
       note TEXT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_distractions_user (user_id),
+      INDEX idx_distractions_session (session_id)
     )
   `)
 }

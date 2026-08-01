@@ -525,7 +525,7 @@ export async function setIgnoredShkoloSubjects(userId: string, subjects: string[
   await prisma.$executeRaw`
     INSERT INTO user_grade_import_preferences (user_id, ignored_shkolo_subjects)
     VALUES (${userId}, ${JSON.stringify(normalized)})
-    ON CONFLICT (user_id) DO UPDATE SET ignored_shkolo_subjects = EXCLUDED.ignored_shkolo_subjects
+    ON CONFLICT (user_id) DO UPDATE SET ignored_shkolo_subjects = VALUES(ignored_shkolo_subjects)
   `;
   return normalized;
 }
@@ -558,7 +558,7 @@ export async function setGradeRiskSettings(
   await prisma.$executeRaw`
     INSERT INTO user_grade_risk_preferences (user_id, config_json)
     VALUES (${userId}, ${JSON.stringify(normalized)})
-    ON CONFLICT (user_id) DO UPDATE SET config_json = EXCLUDED.config_json
+    ON CONFLICT (user_id) DO UPDATE SET config_json = VALUES(config_json)
   `;
   return normalized;
 }
@@ -591,7 +591,7 @@ export async function setCelebrationSettings(
   await prisma.$executeRaw`
     INSERT INTO user_celebration_preferences (user_id, config_json)
     VALUES (${userId}, ${JSON.stringify(normalized)})
-    ON CONFLICT (user_id) DO UPDATE SET config_json = EXCLUDED.config_json
+    ON CONFLICT (user_id) DO UPDATE SET config_json = VALUES(config_json)
   `;
   return normalized;
 }
@@ -639,10 +639,10 @@ export async function recordCourseCelebration(
   await prisma.$executeRaw`
     INSERT INTO user_course_celebrations (user_id, course_id, last_celebrated_at, last_celebrated_score, last_celebrated_type)
     VALUES (${userId}, ${payload.courseId}, NOW(), ${score}, ${payload.type})
-    ON CONFLICT (user_id, course_id) DO UPDATE SET
-      last_celebrated_at = EXCLUDED.last_celebrated_at,
-      last_celebrated_score = EXCLUDED.last_celebrated_score,
-      last_celebrated_type = EXCLUDED.last_celebrated_type
+    ON CONFLICT (user_id) DO UPDATE SET
+      last_celebrated_at = VALUES(last_celebrated_at),
+      last_celebrated_score = VALUES(last_celebrated_score),
+      last_celebrated_type = VALUES(last_celebrated_type)
   `;
 }
 
@@ -658,7 +658,8 @@ export async function ensureGradesTables() {
       end_date DATE NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT uniq_terms_user_year_name UNIQUE (user_id, school_year, name)
+      CONSTRAINT uniq_terms_user_year_name UNIQUE (user_id, school_year, name),
+      INDEX idx_terms_user_year_position (user_id, school_year, position)
     )
   `);
 
@@ -669,10 +670,11 @@ export async function ensureGradesTables() {
       course_id VARCHAR(191) NOT NULL,
       name VARCHAR(64) NOT NULL,
       weight DECIMAL(7,3) NOT NULL DEFAULT 20,
-      drop_lowest BOOLEAN NOT NULL DEFAULT false,
+      drop_lowest TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT uniq_grade_categories_user_course_name UNIQUE (user_id, course_id, name)
+      CONSTRAINT uniq_grade_categories_user_course_name UNIQUE (user_id, course_id, name),
+      INDEX idx_grade_categories_user_course (user_id, course_id)
     )
   `);
 
@@ -687,13 +689,17 @@ export async function ensureGradesTables() {
       grade_value DECIMAL(7,3) NOT NULL,
       performance_score DECIMAL(7,3) NOT NULL,
       weight DECIMAL(7,3) NOT NULL DEFAULT 1,
-      is_final BOOLEAN NOT NULL DEFAULT false,
+      is_final TINYINT(1) NOT NULL DEFAULT 0,
       final_type VARCHAR(16) NULL,
       graded_on DATE NOT NULL,
       note TEXT NULL,
       import_metadata TEXT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_grades_user_term (user_id, term_id),
+      INDEX idx_grades_user_course (user_id, course_id),
+      INDEX idx_grades_user_category (user_id, category_id),
+      INDEX idx_grades_user_term_course_date (user_id, term_id, course_id, graded_on)
     )
   `);
 
@@ -708,8 +714,9 @@ export async function ensureGradesTables() {
 
   try {
     await prisma.$executeRawUnsafe(`
+      ALTER TABLE grade_items
       CREATE INDEX IF NOT EXISTS idx_grades_user_category
-      ON grade_items (user_id, category_id)
+ON grades(user_id, category_id); (user_id, category_id)
     `);
   } catch {
     // Index already exists.
@@ -718,7 +725,7 @@ export async function ensureGradesTables() {
   try {
     await prisma.$executeRawUnsafe(`
       ALTER TABLE grade_items
-      ADD COLUMN is_final BOOLEAN NOT NULL DEFAULT false
+      ADD COLUMN is_final TINYINT(1) NOT NULL DEFAULT 0
     `);
   } catch {
     // Column already exists.
@@ -752,7 +759,8 @@ export async function ensureGradesTables() {
       target_value DECIMAL(7,3) NOT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT uniq_grade_target_user_course UNIQUE (user_id, course_id)
+      CONSTRAINT uniq_grade_target_user_course UNIQUE (user_id, course_id),
+      INDEX idx_grade_target_user_course (user_id, course_id)
     )
   `);
 
@@ -787,12 +795,13 @@ export async function ensureGradesTables() {
     CREATE TABLE IF NOT EXISTS user_course_celebrations (
       user_id VARCHAR(191) NOT NULL,
       course_id VARCHAR(191) NOT NULL,
-      last_celebrated_at TIMESTAMP NOT NULL,
+      last_celebrated_at DATETIME NOT NULL,
       last_celebrated_score DECIMAL(7,3) NULL,
       last_celebrated_type VARCHAR(32) NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (user_id, course_id)
+      PRIMARY KEY (user_id, course_id),
+      INDEX idx_course_celebrations_user_date (user_id, last_celebrated_at)
     )
   `);
 }

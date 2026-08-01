@@ -7,10 +7,12 @@ export async function ensurePlannerTables() {
       user_id VARCHAR(191) NOT NULL,
       course_id VARCHAR(191) NOT NULL,
       activity_id VARCHAR(191) NULL,
-      start_time TIMESTAMP NOT NULL,
-      end_time TIMESTAMP NOT NULL,
+      start_time DATETIME NOT NULL,
+      end_time DATETIME NOT NULL,
       note TEXT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_planner_user_start (user_id, start_time),
+      INDEX idx_planner_user_end (user_id, end_time)
     )
   `);
 }

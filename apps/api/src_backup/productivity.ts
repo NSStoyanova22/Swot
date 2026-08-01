@@ -142,7 +142,8 @@ export async function ensureProductivityTables() {
       consistency_score INT NOT NULL,
       session_length_score INT NOT NULL,
       break_score INT NOT NULL,
-      CONSTRAINT uniq_productivity_user_day UNIQUE (user_id, study_date)
+      CONSTRAINT uniq_productivity_user_day UNIQUE (user_id, study_date),
+      INDEX idx_productivity_user_day (user_id, study_date)
     )
   `)
 
@@ -272,15 +273,15 @@ export async function recomputeAndStoreProductivity(userId: string) {
           break_score
         ) VALUES (
           ${userId},
-          CAST(${row.dateKey} AS DATE),
+          ${row.dateKey},
           ${row.score},
           ${Math.round(row.actualMinutes)},
           ${Math.round(row.targetMinutes)},
           ${row.sessionsCount},
-          ${Number(row.avgSessionLength.toFixed(2))},
-          ${Number(row.breakUsageRatio.toFixed(4))},
-          ${Number(row.targetCompletionRatio.toFixed(4))},
-          ${Number(row.consistencyRatio.toFixed(4))},
+          ${row.avgSessionLength.toFixed(2)},
+          ${row.breakUsageRatio.toFixed(4)},
+          ${row.targetCompletionRatio.toFixed(4)},
+          ${row.consistencyRatio.toFixed(4)},
           ${row.targetScore},
           ${row.consistencyScore},
           ${row.sessionLengthScore},
@@ -291,10 +292,10 @@ export async function recomputeAndStoreProductivity(userId: string) {
 
     await tx.$executeRaw`
       INSERT INTO productivity_state (user_id, today_score, weekly_average_score)
-      VALUES (${userId}, ${Math.round(today.score)}, ${Number(weeklyAverage.toFixed(2))})
+      VALUES (${userId}, ${Math.round(today.score)}, ${weeklyAverage.toFixed(2)})
       ON CONFLICT (user_id) DO UPDATE SET
-        today_score = EXCLUDED.today_score,
-        weekly_average_score = EXCLUDED.weekly_average_score,
+        today_score = VALUES(today_score),
+        weekly_average_score = VALUES(weekly_average_score),
         updated_at = CURRENT_TIMESTAMP
     `
   })

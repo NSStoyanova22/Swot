@@ -516,11 +516,6 @@ export async function routes(app: FastifyInstance) {
     await prisma.$executeRaw`
       INSERT INTO terms (user_id, school_year, name, position, start_date, end_date)
       VALUES (${USER_ID}, ${schoolYear}, ${name}, ${position}, ${startDate}, ${endDate})
-      ON CONFLICT (user_id, school_year, name) DO UPDATE SET
-        position = EXCLUDED.position,
-        start_date = EXCLUDED.start_date,
-        end_date = EXCLUDED.end_date,
-        updated_at = CURRENT_TIMESTAMP
     `;
 
     const row = await prisma.$queryRaw<
@@ -533,8 +528,7 @@ export async function routes(app: FastifyInstance) {
       SELECT id, created_at, updated_at
       FROM terms
       WHERE user_id = ${USER_ID}
-        AND school_year = ${schoolYear}
-        AND name = ${name}
+      ORDER BY id DESC
       LIMIT 1
     `;
 
@@ -720,23 +714,18 @@ export async function routes(app: FastifyInstance) {
     });
 
     const weight = clamp(Number(body.weight), 0, 100);
-    const dropLowest = Boolean(body.dropLowest);
+    const dropLowest = body.dropLowest ? 1 : 0;
 
     await prisma.$executeRaw`
       INSERT INTO grade_categories (user_id, course_id, name, weight, drop_lowest)
       VALUES (${USER_ID}, ${courseId}, ${name}, ${weight}, ${dropLowest})
-      ON CONFLICT (user_id, course_id, name) DO UPDATE SET
-        weight = EXCLUDED.weight,
-        drop_lowest = EXCLUDED.drop_lowest,
-        updated_at = CURRENT_TIMESTAMP
     `;
 
     const row = await prisma.$queryRaw<GradeCategoryRow[]>`
       SELECT id, user_id, course_id, name, weight, drop_lowest, created_at, updated_at
       FROM grade_categories
       WHERE user_id = ${USER_ID}
-        AND course_id = ${courseId}
-        AND name = ${name}
+      ORDER BY id DESC
       LIMIT 1
     `;
     const created = row[0];
@@ -780,7 +769,7 @@ export async function routes(app: FastifyInstance) {
       UPDATE grade_categories
       SET name = ${name},
           weight = ${weight},
-          drop_lowest = ${dropLowest}
+          drop_lowest = ${dropLowest ? 1 : 0}
       WHERE id = ${categoryId} AND user_id = ${USER_ID}
     `;
 
@@ -870,7 +859,7 @@ export async function routes(app: FastifyInstance) {
         gc.drop_lowest AS category_drop_lowest
       FROM grade_items g
       INNER JOIN terms t ON t.id = g.term_id
-      INNER JOIN "Course" c ON c.id = g.course_id
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
       LEFT JOIN grade_categories gc ON gc.id = g.category_id
       WHERE g.user_id = ${USER_ID}
       ${termId ? Prisma.sql`AND g.term_id = ${termId}` : Prisma.empty}
@@ -1528,7 +1517,7 @@ export async function routes(app: FastifyInstance) {
         t.updated_at,
         c.name AS course_name
       FROM course_grade_targets t
-      INNER JOIN "Course" c ON c.id = t.course_id
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY t.course_id
       WHERE t.user_id = ${USER_ID}
       ORDER BY c.name ASC
     `;
@@ -1556,10 +1545,10 @@ export async function routes(app: FastifyInstance) {
     await prisma.$executeRaw`
       INSERT INTO course_grade_targets (user_id, course_id, target_score, scale, target_value)
       VALUES (${USER_ID}, ${params.courseId}, ${targetScore}, ${scale}, ${targetValue})
-      ON CONFLICT (user_id, course_id) DO UPDATE SET
-        target_score = EXCLUDED.target_score,
-        scale = EXCLUDED.scale,
-        target_value = EXCLUDED.target_value
+      ON CONFLICT (user_id) DO UPDATE SET
+        target_score = VALUES(target_score),
+        scale = VALUES(scale),
+        target_value = VALUES(target_value)
     `;
 
     return {
@@ -1625,10 +1614,10 @@ export async function routes(app: FastifyInstance) {
         total_minutes: number;
       }>
     >`
-      SELECT s."courseId" AS course_id, SUM(s."durationMinutes") AS total_minutes
-      FROM "StudySession" s
-      WHERE s."userId" = ${USER_ID} AND s."startTime" >= ${fromDate} AND s."startTime" < ${toDate}
-      GROUP BY s."courseId"
+      SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
+      FROM \`StudySession\` s
+      WHERE s.\`userId\` = ${USER_ID} AND s.\`startTime\` >= ${fromDate} AND s.\`startTime\` < ${toDate}
+      GROUP BY s.\`courseId\`
     `;
 
     const targetRows = await prisma.$queryRaw<
@@ -1912,12 +1901,12 @@ export async function routes(app: FastifyInstance) {
       studyRows = await prisma.$queryRaw<
         Array<{ course_id: string; total_minutes: number | null }>
       >`
-        SELECT s."courseId" AS course_id, SUM(s."durationMinutes") AS total_minutes
-        FROM "StudySession" s
-        WHERE s."userId" = ${USER_ID}
-          AND s."startTime" >= ${fromDate}
-          AND s."startTime" < ${toDate}
-        GROUP BY s."courseId"
+        SELECT s.\`courseId\` AS course_id, SUM(s.\`durationMinutes\`) AS total_minutes
+        FROM \`StudySession\` s
+        WHERE s.\`userId\` = ${USER_ID}
+          AND s.\`startTime\` >= ${fromDate}
+          AND s.\`startTime\` < ${toDate}
+        GROUP BY s.\`courseId\`
       `;
     } catch (error) {
       req.log.warn({ err: error }, "academic-risk: failed to load study rows");
@@ -2258,7 +2247,7 @@ export async function routes(app: FastifyInstance) {
         g.weight,
         gc.name AS category_name
       FROM grade_items g
-      INNER JOIN "Course" c ON c.id = g.course_id
+      INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
       LEFT JOIN grade_categories gc ON gc.id = g.category_id
       WHERE g.user_id = ${USER_ID} AND g.term_id = ${term.id}
       ORDER BY c.name ASC, g.graded_on DESC, g.id DESC
@@ -2284,7 +2273,7 @@ export async function routes(app: FastifyInstance) {
             g.weight,
             gc.name AS category_name
           FROM grade_items g
-          INNER JOIN "Course" c ON c.id = g.course_id
+          INNER JOIN \`Course\` c ON BINARY c.id = BINARY g.course_id
           LEFT JOIN grade_categories gc ON gc.id = g.category_id
           WHERE g.user_id = ${USER_ID} AND g.term_id = ${previousTermId}
           ORDER BY c.name ASC, g.graded_on DESC, g.id DESC
@@ -3212,13 +3201,13 @@ export async function routes(app: FastifyInstance) {
       UPDATE task_subtasks
       SET
         title = COALESCE(${body.title?.trim() || null}, title),
-        done = COALESCE(${typeof body.done === "boolean" ? body.done : null}, done),
+        done = COALESCE(${typeof body.done === "boolean" ? (body.done ? 1 : 0) : null}, done),
         sort_order = COALESCE(${Number.isFinite(body.sortOrder) ? Math.round(Number(body.sortOrder)) : null}, sort_order)
       WHERE id = ${subtaskId} AND task_id = ${taskId} AND user_id = ${USER_ID}
     `;
 
     const rows = await prisma.$queryRaw<
-      Array<{ id: number; task_id: number; title: string; done: boolean; sort_order: number }>
+      Array<{ id: number; task_id: number; title: string; done: number; sort_order: number }>
     >`
       SELECT id, task_id, title, done, sort_order
       FROM task_subtasks
@@ -3330,7 +3319,7 @@ export async function routes(app: FastifyInstance) {
         ${endTime},
         ${body.rotationIntervalDays ?? null},
         ${Math.max(0, Math.round(Number(body.rotationOffset ?? 0)))},
-        ${body.isActive !== false}
+        ${body.isActive === false ? 0 : 1}
       )
     `;
     const rows = await prisma.$queryRaw<Array<{ id: number }>>`
@@ -3373,7 +3362,7 @@ export async function routes(app: FastifyInstance) {
         end_time: string;
         rotation_interval_days: number | null;
         rotation_offset: number;
-        is_active: boolean;
+        is_active: number;
       }>
     >`
       SELECT title, note, course_id, activity_id, day_of_week, start_time, end_time, rotation_interval_days, rotation_offset, is_active
@@ -3396,7 +3385,7 @@ export async function routes(app: FastifyInstance) {
         end_time = ${body.endTime?.trim() || row.end_time},
         rotation_interval_days = ${body.rotationIntervalDays === undefined ? row.rotation_interval_days : body.rotationIntervalDays ?? null},
         rotation_offset = ${Number.isFinite(body.rotationOffset) ? Math.max(0, Math.round(Number(body.rotationOffset))) : row.rotation_offset},
-        is_active = ${typeof body.isActive === "boolean" ? body.isActive : row.is_active}
+        is_active = ${typeof body.isActive === "boolean" ? (body.isActive ? 1 : 0) : row.is_active}
       WHERE id = ${blockId} AND user_id = ${USER_ID}
     `;
 
@@ -3555,7 +3544,7 @@ export async function routes(app: FastifyInstance) {
         remind_at = ${nextRemindAt},
         repeat_rule = ${nextRepeat},
         next_trigger_at = ${nextNextTrigger},
-        delivered = ${typeof body.delivered === "boolean" ? body.delivered : row.delivered}
+        delivered = ${typeof body.delivered === "boolean" ? (body.delivered ? 1 : 0) : row.delivered}
       WHERE id = ${reminderId} AND user_id = ${USER_ID}
     `;
     return { ok: true };

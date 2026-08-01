@@ -29,18 +29,8 @@ import { ensureAdaptiveTimerTables, getAdaptiveEnabled, getTimerRecommendation, 
 
 const app = Fastify({ logger: true });
 
-const corsOrigins = process.env.CORS_ORIGIN?.split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
-const corsOriginOption =
-  corsOrigins && corsOrigins.length === 1
-    ? corsOrigins[0]
-    : corsOrigins && corsOrigins.length > 1
-      ? corsOrigins
-      : true;
-
 await app.register(cors, {
-  origin: corsOriginOption as never,
+  origin: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 });
@@ -410,8 +400,7 @@ app.put("/me/preferences", async (req, reply) => {
 await app.register(routes);
 
 const port = Number(process.env.PORT ?? 4000);
-const host = process.env.HOST ?? "0.0.0.0";
-app.listen({ port, host }).catch((err) => {
+app.listen({ port, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);
   process.exit(1);
 });

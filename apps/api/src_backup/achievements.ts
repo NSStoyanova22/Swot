@@ -125,10 +125,9 @@ async function earnAchievement(
   metadata: Record<string, unknown> = {},
 ) {
   await prisma.$executeRaw`
-   INSERT INTO earned_achievements (user_id, code, level_key, metadata)
-VALUES (${userId}, ${code}, ${levelKey}, ${JSON.stringify(metadata)}::jsonb)
+    INSERT INTO earned_achievements (user_id, code, level_key, metadata)
+VALUES (${userId}, ${code}, ${levelKey}, ${JSON.stringify(metadata)})
 ON CONFLICT (user_id, code, level_key) DO NOTHING
-  `
 }
 
 export async function ensureAchievementsTable() {
