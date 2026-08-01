@@ -6,15 +6,11 @@
 [![Database](https://img.shields.io/badge/Database-Neon%2FPostgreSQL-336791?style=for-the-badge)](https://neon.tech/)
 
 > If you can’t measure it, you can’t improve it.
+> 
+### 🌐 Live Demo - 🔗 https://swot-deployment-web.vercel.app
 
-SWOT is a study planner built to do more than count hours. It tracks sessions, grades, tasks, and focus habits so students can see how they study, where they struggle, and what to do next.
+#### SWOT is a study planner built to do more than count hours. It tracks sessions, grades, tasks, and focus habits so students can see how they study, where they struggle, and what to do next.
 
-The name SWOT is a nod to strategic planning:
-
-* **Strengths**: see where focus and productivity are highest.
-* **Weaknesses**: detect academic risk before it becomes a problem.
-* **Opportunities**: adapt study sessions from real usage patterns.
-* **Threats**: track distractions and identify time sinks.
 
 ## What makes SWOT different?
 
