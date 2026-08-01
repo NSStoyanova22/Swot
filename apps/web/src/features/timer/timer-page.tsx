@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock3, Coffee, Flame, Info, Maximize2, Minimize2, Pause, Play, RotateCcw, Save, Timer } from 'lucide-react'
@@ -24,13 +24,21 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { MarkdownNoteEditor } from '@/components/ui/markdown-note-editor'
+import { computeCountUpProgress, useElapsedTimer } from '@/hooks/use-elapsed-timer'
 import { useFullscreen } from '@/hooks/use-fullscreen'
 import { useTimerSession } from '@/hooks/use-timer-session'
+import { completedCountdownTimes, countUpTimes, type ElapsedTimerSnapshot } from '@/lib/elapsed-timer'
+import {
+  readManualTimerState,
+  readPomodoroState,
+  writeManualTimerState,
+  writePomodoroState,
+  type PomodoroMode,
+} from '@/lib/timer-storage'
 import { cn } from '@/lib/utils'
 import { canTriggerCelebrationCooldown, markCelebrationCooldown } from '@/features/celebration/celebration-cooldown'
 import { notifyCelebration } from '@/features/celebration/celebration-events'
 
-type PomodoroMode = 'focus' | 'short' | 'long'
 type TimerKind = 'focus' | 'manual'
 type SessionOutcome = 'completed' | 'continue' | 'break'
 
@@ -490,18 +498,67 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     [effectiveFocusMinutes, settings?.breakSessionMinutes, settings?.longSessionMinutes],
   )
 
-  const [mode, setMode] = useState<PomodoroMode>('focus')
-  const [remainingSeconds, setRemainingSeconds] = useState(modeDurations.focus * 60)
-  const [pomodoroRunning, setPomodoroRunning] = useState(false)
+  const savedPomodoro = useMemo(() => readPomodoroState(), [])
 
-  const [manualRunning, setManualRunning] = useState(false)
-  const [manualElapsedSeconds, setManualElapsedSeconds] = useState(0)
-  const [manualStartedAt, setManualStartedAt] = useState<string | null>(null)
-  const [focusSessionsCompleted, setFocusSessionsCompleted] = useState(0)
+  const [mode, setMode] = useState<PomodoroMode>(savedPomodoro?.mode ?? 'focus')
+  const [focusSessionsCompleted, setFocusSessionsCompleted] = useState(savedPomodoro?.focusSessionsCompleted ?? 0)
   const [fullscreenTimerKind, setFullscreenTimerKind] = useState<TimerKind>('focus')
   const [showTaskCelebration, setShowTaskCelebration] = useState(false)
 
   const [logModal, setLogModal] = useState<{ kind: TimerKind; startTime: string; endTime: string } | null>(null)
+
+  const modeRef = useRef(mode)
+  const settingsRef = useRef(settings)
+  const pomodoroMetaRef = useRef({ mode, focusSessionsCompleted })
+  modeRef.current = mode
+  settingsRef.current = settings
+  pomodoroMetaRef.current = { mode, focusSessionsCompleted }
+
+  const modeSeconds = modeDurations[mode] * 60
+  const modeDurationMs = modeSeconds * 1000
+  const manualReferenceMs = modeDurations.focus * 60 * 1000
+
+  const persistPomodoro = useCallback((snapshot: ElapsedTimerSnapshot) => {
+    writePomodoroState({
+      ...snapshot,
+      mode: pomodoroMetaRef.current.mode,
+      focusSessionsCompleted: pomodoroMetaRef.current.focusSessionsCompleted,
+    })
+  }, [])
+
+  const handlePomodoroComplete = useCallback((snapshot: ElapsedTimerSnapshot) => {
+    if (settingsRef.current?.soundsEnabled ?? true) {
+      playEndSound()
+    }
+
+    if (modeRef.current !== 'focus') return
+
+    const times = completedCountdownTimes(snapshot)
+    if (!times) return
+
+    setFocusSessionsCompleted((current) => current + 1)
+    setLogModal({ kind: 'focus', startTime: times.startTime, endTime: times.endTime })
+  }, [])
+
+  const pomodoroTimer = useElapsedTimer({
+    totalDurationMs: modeDurationMs,
+    persist: persistPomodoro,
+    restore: () => readPomodoroState(),
+    onComplete: handlePomodoroComplete,
+  })
+
+  const manualTimer = useElapsedTimer({
+    totalDurationMs: 24 * 60 * 60 * 1000,
+    persist: writeManualTimerState,
+    restore: () => readManualTimerState(),
+  })
+
+  const pomodoroSnapshotRef = useRef(pomodoroTimer.snapshot)
+  pomodoroSnapshotRef.current = pomodoroTimer.snapshot
+
+  useEffect(() => {
+    persistPomodoro(pomodoroSnapshotRef.current)
+  }, [focusSessionsCompleted, mode, persistPomodoro])
 
   const canTriggerTimerCelebration = (scope: string, score: number) => {
     if (!celebrationSettings.enabled) return false
@@ -521,80 +578,48 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
       }
     : null
 
-  const modeSeconds = modeDurations[mode] * 60
-
   useEffect(() => {
     if (!showTaskCelebration) return
     const timeout = window.setTimeout(() => setShowTaskCelebration(false), 1800)
     return () => window.clearTimeout(timeout)
   }, [showTaskCelebration])
 
-  useEffect(() => {
-    setPomodoroRunning(false)
-    setRemainingSeconds(modeSeconds)
-  }, [mode, modeSeconds])
+  const prevModeKeyRef = useRef(`${mode}:${modeDurationMs}`)
+  const shouldStartAfterModeChangeRef = useRef(false)
 
   useEffect(() => {
-    if (!pomodoroRunning) return
-
-    const interval = window.setInterval(() => {
-      setRemainingSeconds((current) => {
-        if (current <= 1) {
-          window.clearInterval(interval)
-          return 0
-        }
-
-        return current - 1
-      })
-    }, 1000)
-
-    return () => window.clearInterval(interval)
-  }, [pomodoroRunning])
-
-  useEffect(() => {
-    if (remainingSeconds !== 0 || !pomodoroRunning) return
-
-    setPomodoroRunning(false)
-
-    if (settings?.soundsEnabled ?? true) {
-      playEndSound()
+    const key = `${mode}:${modeDurationMs}`
+    if (prevModeKeyRef.current === key) return
+    prevModeKeyRef.current = key
+    pomodoroTimer.reset()
+    if (shouldStartAfterModeChangeRef.current) {
+      shouldStartAfterModeChangeRef.current = false
+      pomodoroTimer.start()
     }
+  }, [mode, modeDurationMs, pomodoroTimer.reset, pomodoroTimer.start])
 
-    if (mode === 'focus') {
-      const end = new Date()
-      const start = new Date(end.getTime() - modeSeconds * 1000)
-      setFocusSessionsCompleted((current) => current + 1)
-      setLogModal({ kind: 'focus', startTime: start.toISOString(), endTime: end.toISOString() })
-    }
-  }, [mode, modeSeconds, pomodoroRunning, remainingSeconds, settings?.soundsEnabled, timerSession])
-
-  useEffect(() => {
-    if (!manualRunning) return
-
-    const interval = window.setInterval(() => {
-      setManualElapsedSeconds((current) => current + 1)
-    }, 1000)
-
-    return () => window.clearInterval(interval)
-  }, [manualRunning])
-
-  const startPomodoro = () => {
+  const startPomodoro = useCallback(() => {
     timerSession.setSessionType('pomodoro')
     if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
       timerSession.setSessionStartTime(new Date().toISOString())
     }
-    setPomodoroRunning(true)
-  }
+    pomodoroTimer.start()
+  }, [pomodoroTimer, timerSession])
 
   useEffect(() => {
     if (startFocusSignal <= 0) return
-    setMode('focus')
     timerSession.setSessionType('pomodoro')
     if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
       timerSession.setSessionStartTime(new Date().toISOString())
     }
-    setPomodoroRunning(true)
-  }, [startFocusSignal, timerSession])
+    if (mode !== 'focus') {
+      shouldStartAfterModeChangeRef.current = true
+      setMode('focus')
+    } else {
+      pomodoroTimer.reset()
+      pomodoroTimer.start()
+    }
+  }, [mode, pomodoroTimer.reset, pomodoroTimer.start, startFocusSignal, timerSession])
 
   useEffect(() => {
     if (focusOverrideEnabled) return
@@ -608,37 +633,29 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     console.warn('[timer] Adaptive recommendation explanation data is missing or incomplete', recommendation)
   }, [hasRecommendationExplanation, recommendation, showWhy])
 
-  const resetPomodoro = () => {
-    setPomodoroRunning(false)
-    setRemainingSeconds(modeSeconds)
-  }
+  const resetPomodoro = useCallback(() => {
+    pomodoroTimer.reset()
+  }, [pomodoroTimer])
 
-  const startManual = () => {
+  const startManual = useCallback(() => {
     timerSession.setSessionType('manual')
     if (timerSession.activeTaskId && !timerSession.sessionStartTime) {
       timerSession.setSessionStartTime(new Date().toISOString())
     }
-    if (!manualStartedAt) {
-      setManualStartedAt(new Date().toISOString())
-    }
+    manualTimer.start()
+  }, [manualTimer, timerSession])
 
-    setManualRunning(true)
-  }
+  const resetManual = useCallback(() => {
+    manualTimer.reset()
+  }, [manualTimer])
 
-  const resetManual = () => {
-    setManualRunning(false)
-    setManualElapsedSeconds(0)
-    setManualStartedAt(null)
-  }
+  const finishManualAndLog = useCallback(() => {
+    const times = countUpTimes(manualTimer.snapshot, manualTimer.now)
+    if (!times) return
 
-  const finishManualAndLog = () => {
-    if (!manualStartedAt || manualElapsedSeconds === 0) return
-
-    const start = new Date(manualStartedAt)
-    const end = new Date(start.getTime() + manualElapsedSeconds * 1000)
-    setManualRunning(false)
-    setLogModal({ kind: 'manual', startTime: start.toISOString(), endTime: end.toISOString() })
-  }
+    manualTimer.pause()
+    setLogModal({ kind: 'manual', startTime: times.startTime, endTime: times.endTime })
+  }, [manualTimer])
 
   const enterFocusFullscreen = () => {
     setFullscreenTimerKind('focus')
@@ -650,12 +667,12 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
     void fullscreen.enter()
   }
 
-  const toggleFullscreen = () => {
+  const toggleFullscreen = useCallback(() => {
     if (!fullscreen.isFullscreen) {
-      setFullscreenTimerKind(manualRunning ? 'manual' : 'focus')
+      setFullscreenTimerKind(manualTimer.running ? 'manual' : 'focus')
     }
     void fullscreen.toggle()
-  }
+  }, [fullscreen, manualTimer.running])
 
   const onTaskLinkedSessionSaved = async (outcome: SessionOutcome | null) => {
     if (!outcome) return
@@ -673,14 +690,14 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
     if (outcome === 'continue') {
       setMode('focus')
-      setRemainingSeconds(modeDurations.focus * 60)
-      setPomodoroRunning(true)
+      pomodoroTimer.reset()
+      pomodoroTimer.start()
       return
     }
 
     if (outcome === 'break') {
+      shouldStartAfterModeChangeRef.current = true
       setMode('short')
-      setPomodoroRunning(true)
     }
   }
 
@@ -732,8 +749,8 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
       if (event.code === 'Space') {
         event.preventDefault()
-        if (pomodoroRunning) {
-          setPomodoroRunning(false)
+        if (pomodoroTimer.running) {
+          pomodoroTimer.pause()
         } else {
           startPomodoro()
         }
@@ -744,8 +761,8 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
       }
       if (event.key.toLowerCase() === 'm') {
         event.preventDefault()
-        if (manualRunning) {
-          setManualRunning(false)
+        if (manualTimer.running) {
+          manualTimer.pause()
         } else {
           startManual()
         }
@@ -758,16 +775,18 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [manualRunning, pomodoroRunning, startPomodoro, toggleFullscreen])
+  }, [manualTimer, pomodoroTimer, resetPomodoro, startManual, startPomodoro, toggleFullscreen])
 
-  const modeProgress = modeSeconds > 0 ? (modeSeconds - remainingSeconds) / modeSeconds : 0
-  const manualProgress = Math.min(1, manualElapsedSeconds / Math.max(1, modeDurations.focus * 60))
+  const modeProgress = pomodoroTimer.progress
+  const manualProgress = computeCountUpProgress(manualTimer.snapshot, manualReferenceMs, manualTimer.now)
   const streak = streakQuery.data?.currentStreak ?? 0
   const lifetimeSessions = recommendation?.sessionCount ?? 0
   const isFocusFullscreen = fullscreenTimerKind === 'focus'
   const fullscreenProgress = isFocusFullscreen ? modeProgress : manualProgress
-  const fullscreenTime = isFocusFullscreen ? formatClock(remainingSeconds) : formatClock(manualElapsedSeconds)
-  const fullscreenRunning = isFocusFullscreen ? pomodoroRunning : manualRunning
+  const fullscreenTime = isFocusFullscreen
+    ? formatClock(pomodoroTimer.remainingSeconds)
+    : formatClock(manualTimer.elapsedSeconds)
+  const fullscreenRunning = isFocusFullscreen ? pomodoroTimer.running : manualTimer.running
   const fullscreenSessionLabel = activeTask?.name ?? (isFocusFullscreen ? modeTheme[mode].label : 'Manual Study Session')
   const fullscreenTaskLabel = activeTask
     ? `${activeTask.courseName ? `Course: ${activeTask.courseName}` : 'Task-linked session'}`
@@ -783,7 +802,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           'pointer-events-none absolute inset-0 -z-10 rounded-3xl bg-gradient-to-br blur-2xl',
           modeTheme[mode].aura,
         )}
-        animate={{ opacity: pomodoroRunning ? 0.95 : 0.65 }}
+        animate={{ opacity: pomodoroTimer.running ? 0.95 : 0.65 }}
         transition={{ duration: 0.45 }}
       />
 
@@ -826,7 +845,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           <Card
             className={cn(
               'w-full border-white/30 bg-card/55 backdrop-blur-xl shadow-soft',
-              pomodoroRunning && 'shadow-[0_0_45px_rgba(236,72,153,0.25)]',
+              pomodoroTimer.running && 'shadow-[0_0_45px_rgba(236,72,153,0.25)]',
             )}
           >
             <CardHeader className="space-y-4">
@@ -870,9 +889,9 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
               <div className="rounded-2xl border border-border/70 bg-background/45 p-4 sm:p-6">
                 <CircularTimer
                   mode={mode}
-                  running={pomodoroRunning}
+                  running={pomodoroTimer.running}
                   progress={modeProgress}
-                  time={formatClock(remainingSeconds)}
+                  time={formatClock(pomodoroTimer.remainingSeconds)}
                 />
                 <div className="mt-4 space-y-2">
                   <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -892,13 +911,13 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
 
               <div className="flex flex-wrap items-center gap-2">
                 <motion.div whileTap={{ scale: 0.97 }}>
-                  {!pomodoroRunning ? (
+                  {!pomodoroTimer.running ? (
                     <Button onClick={startPomodoro} className="min-w-28 gap-2">
                       <Play className="h-4 w-4" />
                       Start
                     </Button>
                   ) : (
-                    <Button variant="secondary" onClick={() => setPomodoroRunning(false)} className="min-w-28 gap-2">
+                    <Button variant="secondary" onClick={pomodoroTimer.pause} className="min-w-28 gap-2">
                       <Pause className="h-4 w-4" />
                       Pause
                     </Button>
@@ -940,7 +959,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
             <CardContent className="space-y-4">
               <div className="rounded-xl border border-border/70 bg-background/65 p-5 text-center">
                 <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Elapsed</p>
-                <p className="mt-2 text-4xl font-semibold tracking-tight">{formatClock(manualElapsedSeconds)}</p>
+                <p className="mt-2 text-4xl font-semibold tracking-tight">{formatClock(manualTimer.elapsedSeconds)}</p>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                   <motion.div
                     className="h-full rounded-full bg-primary/80"
@@ -949,20 +968,20 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                   />
                 </div>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {manualStartedAt
-                    ? `Started at ${new Date(manualStartedAt).toLocaleTimeString()}`
+                  {manualTimer.snapshot.startedAt
+                    ? `Started at ${new Date(manualTimer.snapshot.startedAt).toLocaleTimeString()}`
                     : 'Press start to begin tracking'}
                 </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {!manualRunning ? (
+                {!manualTimer.running ? (
                   <Button onClick={startManual} className="gap-2">
                     <Play className="h-4 w-4" />
                     Start
                   </Button>
                 ) : (
-                  <Button variant="secondary" onClick={() => setManualRunning(false)} className="gap-2">
+                  <Button variant="secondary" onClick={manualTimer.pause} className="gap-2">
                     <Pause className="h-4 w-4" />
                     Pause
                   </Button>
@@ -974,7 +993,7 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                 <Button
                   variant="default"
                   onClick={finishManualAndLog}
-                  disabled={!manualStartedAt || manualElapsedSeconds === 0}
+                  disabled={!manualTimer.snapshot.startedAt || manualTimer.elapsedSeconds === 0}
                   className="gap-2"
                 >
                   <Save className="h-4 w-4" />
@@ -1089,13 +1108,13 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
             <div className="flex flex-wrap items-center justify-center gap-2">
               {isFocusFullscreen ? (
                 <>
-                  {!pomodoroRunning ? (
+                  {!pomodoroTimer.running ? (
                     <Button onClick={startPomodoro} className="min-w-28 gap-2">
                       <Play className="h-4 w-4" />
                       Start
                     </Button>
                   ) : (
-                    <Button variant="secondary" onClick={() => setPomodoroRunning(false)} className="min-w-28 gap-2">
+                    <Button variant="secondary" onClick={pomodoroTimer.pause} className="min-w-28 gap-2">
                       <Pause className="h-4 w-4" />
                       Pause
                     </Button>
@@ -1107,13 +1126,13 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
                 </>
               ) : (
                 <>
-                  {!manualRunning ? (
+                  {!manualTimer.running ? (
                     <Button onClick={startManual} className="gap-2">
                       <Play className="h-4 w-4" />
                       Start
                     </Button>
                   ) : (
-                    <Button variant="secondary" onClick={() => setManualRunning(false)} className="gap-2">
+                    <Button variant="secondary" onClick={manualTimer.pause} className="gap-2">
                       <Pause className="h-4 w-4" />
                       Pause
                     </Button>
@@ -1195,11 +1214,10 @@ export function TimerPage({ startFocusSignal = 0 }: { startFocusSignal?: number 
           onOpenChange={(open) => {
             if (!open) {
               if (logModal.kind === 'manual') {
-                setManualElapsedSeconds(0)
-                setManualStartedAt(null)
+                manualTimer.reset()
               }
               if (logModal.kind === 'focus') {
-                setRemainingSeconds(modeSeconds)
+                pomodoroTimer.reset()
               }
               setLogModal(null)
             }
